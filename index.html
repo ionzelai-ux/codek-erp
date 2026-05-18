@@ -1185,19 +1185,19 @@ function save() {
         nota_especial: s.notaEspecial || '',
         pagos: s.pagos || [], sesiones: s.sesiones || []
       }));
-      await (await supa.from('socios')).upsert(sociosDB);
+      await dbUpsert('socios', sociosDB);
 
       // Upsert facturas venta
       if (facturasVenta.length > 0)
-        await (await supa.from('facturas_venta')).upsert(facturasVenta);
+        await dbUpsert('facturas_venta', facturasVenta);
 
       // Upsert facturas compra
       if (facturasCompra.length > 0)
-        await (await supa.from('facturas_compra')).upsert(facturasCompra);
+        await dbUpsert('facturas_compra', facturasCompra);
 
       // Upsert wellhub
       if (wellhubData.length > 0)
-        await (await supa.from('wellhub')).upsert(wellhubData.map(w => ({
+        await dbUpsert('wellhub', wellhubData.map(w => ({
           id: w.id, mes: w.mes, anyo: w.anyo,
           importe: w.importe, estado: w.estado, notas: w.notas || ''
         })));
