@@ -1140,6 +1140,85 @@
 </div>
 
 <script>
+
+// ===== SUPABASE CONFIG =====
+const SUPA_URL = 'https://byyicxmrketuueuziyey.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ5eWljeG1ya2V0dXVldXppeWV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwOTg3MjgsImV4cCI6MjA5NDY3NDcyOH0.OG9CaWloGrxyEERree1PsI4qMpr-u3az-c0U3jBiLk0';
+const SUPA_H = {'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Content-Type': 'application/json'};
+
+async function dbSelect(table, order) {
+  const url = SUPA_URL + '/rest/v1/' + table + '?select=*' + (order ? '&order=' + order : '');
+  const r = await fetch(url, {headers: SUPA_H});
+  if (!r.ok) { console.error('dbSelect error', table, r.status); return []; }
+  return r.json();
+}
+
+async function dbUpsert(table, rows) {
+  if (!rows || !rows.length) return;
+  await fetch(SUPA_URL + '/rest/v1/' + table, {
+    method: 'POST',
+    headers: Object.assign({}, SUPA_H, {'Prefer': 'resolution=merge-duplicates,return=minimal'}),
+    body: JSON.stringify(rows)
+  });
+}
+
+async function loadFromSupabase() {
+  try {
+    const [sData, whData] = await Promise.all([
+      dbSelect('socios', 'id'),
+      dbSelect('wellhub', 'anyo')
+    ]);
+    if (sData && sData.length > 0) {
+      socios = sData.map(r => ({
+        id: r.id, nombre: r.nombre, apellidos: r.apellidos || '',
+        email: r.email || '', tel: r.tel || '', dni: r.dni || '',
+        alta: r.alta, baja: r.baja, tipo: r.tipo,
+        tarifa: r.tarifa || '', bono: r.bono || null,
+        sesTotales: r.ses_totales, sesRestantes: r.ses_restantes,
+        precioBono: r.precio_bono, actividades: r.actividades || '',
+        pago: r.pago, ultPago: r.ult_pago, estado: r.estado,
+        notaEspecial: r.nota_especial || '',
+        pagos: r.pagos || [], sesiones: r.sesiones || []
+      }));
+      console.log('Loaded', socios.length, 'socios from Supabase');
+    }
+    if (whData && whData.length > 0) {
+      wellhubData = whData.map(r => ({
+        id: r.id, mes: r.mes, anyo: r.anyo,
+        importe: r.importe, estado: r.estado, notas: r.notas || ''
+      }));
+    }
+    renderDashboard();
+  } catch(e) {
+    console.error('Supabase load error:', e);
+    // Fall back to localStorage
+    renderDashboard();
+  }
+}
+
+async function saveToSupabase() {
+  try {
+    const sociosDB = socios.map(s => ({
+      id: s.id, nombre: s.nombre, apellidos: s.apellidos || '',
+      email: s.email || '', tel: s.tel || '', dni: s.dni || '',
+      alta: s.alta || null, baja: s.baja || null, tipo: s.tipo,
+      tarifa: s.tarifa || '', bono: s.bono || null,
+      ses_totales: s.sesTotales, ses_restantes: s.sesRestantes,
+      precio_bono: s.precioBono || null, actividades: s.actividades || '',
+      pago: s.pago, ult_pago: s.ultPago || null, estado: s.estado,
+      nota_especial: s.notaEspecial || '',
+      pagos: s.pagos || [], sesiones: s.sesiones || []
+    }));
+    await dbUpsert('socios', sociosDB);
+    if (wellhubData.length) {
+      await dbUpsert('wellhub', wellhubData.map(w => ({
+        id: w.id, mes: w.mes, anyo: w.anyo,
+        importe: w.importe, estado: w.estado, notas: w.notas || ''
+      })));
+    }
+  } catch(e) { console.error('Supabase save error:', e); }
+}
+
 // ===== DATA =====
 let socios = [];
 let facturasVenta = [];
@@ -1169,43 +1248,12 @@ function agotarBono(id) {
 }
 
 function save() {
-  // Debounce saves to avoid hammering Supabase
-  if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(async () => {
-    try {
-      // Upsert socios
-      const sociosDB = socios.map(s => ({
-        id: s.id, nombre: s.nombre, apellidos: s.apellidos,
-        email: s.email, tel: s.tel, dni: s.dni || '',
-        alta: s.alta || null, baja: s.baja || null, tipo: s.tipo,
-        tarifa: s.tarifa || '', bono: s.bono || null,
-        ses_totales: s.sesTotales, ses_restantes: s.sesRestantes,
-        precio_bono: s.precioBono || null, actividades: s.actividades || '',
-        pago: s.pago, ult_pago: s.ultPago || null, estado: s.estado,
-        nota_especial: s.notaEspecial || '',
-        pagos: s.pagos || [], sesiones: s.sesiones || []
-      }));
-      await dbUpsert('socios', sociosDB);
-
-      // Upsert facturas venta
-      if (facturasVenta.length > 0)
-        await dbUpsert('facturas_venta', facturasVenta);
-
-      // Upsert facturas compra
-      if (facturasCompra.length > 0)
-        await dbUpsert('facturas_compra', facturasCompra);
-
-      // Upsert wellhub
-      if (wellhubData.length > 0)
-        await dbUpsert('wellhub', wellhubData.map(w => ({
-          id: w.id, mes: w.mes, anyo: w.anyo,
-          importe: w.importe, estado: w.estado, notas: w.notas || ''
-        })));
-
-    } catch(e) {
-      console.error('Save error:', e);
-    }
-  }, 600);
+  clearTimeout(window._saveTimer);
+  window._saveTimer = setTimeout(saveToSupabase, 800);
+  localStorage.setItem('ck_socios', JSON.stringify(socios));
+  localStorage.setItem('ck_fventa', JSON.stringify(facturasVenta));
+  localStorage.setItem('ck_fcompra', JSON.stringify(facturasCompra));
+  localStorage.setItem('ck_wellhub', JSON.stringify(wellhubData));
 }
 
 // ===== NAV =====
@@ -1601,7 +1649,12 @@ function tabFactura(tab, el) {
 
 function renderFVenta() {
   const el = document.getElementById('facturas-venta-list');
-  if (facturasVenta.length === 0) {
+  const WELLHUB_INICIALES = [{"id": 1, "mes": 1, "anyo": 2026, "importe": 256.2, "estado": "pagado", "notas": ""}, {"id": 2, "mes": 2, "anyo": 2026, "importe": 738.65, "estado": "pagado", "notas": ""}, {"id": 3, "mes": 3, "anyo": 2026, "importe": 1000.45, "estado": "enviado", "notas": ""}, {"id": 4, "mes": 4, "anyo": 2026, "importe": 1240.75, "estado": "pendiente", "notas": ""}];
+if (wellhubData.length === 0) {
+  wellhubData = WELLHUB_INICIALES;
+  save();
+}
+if (facturasVenta.length === 0) {
     el.innerHTML = `<div class="empty"><div class="empty-icon">📄</div><div class="empty-text">No hay facturas de venta</div></div>`;
     return;
   }
@@ -1618,6 +1671,1577 @@ function renderFVenta() {
     </div>
   `).join('');
 }
+
+function procesarPagos() {
+  const raw = document.getElementById('pagos-input').value.trim();
+  const prefijo = document.getElementById('prefijo-factura').value.trim() || 'FV';
+  let numInicial = parseInt(document.getElementById('num-factura').value) || 1;
+
+  if (!raw) { alert('Introduce pagos para procesar'); return; }
+
+  const lineas = raw.split('\n').map(l => l.trim()).filter(l => l);
+  const grupos = {};
+
+  lineas.forEach(l => {
+    const partes = l.split('|').map(p => p.trim());
+    if (partes.length < 2) return;
+    const fecha = partes[0];
+    const importe = parseFloat(partes[1]) || 0;
+    const desc = partes[2] || 'Pago';
+    if (!grupos[fecha]) grupos[fecha] = [];
+    grupos[fecha].push({ desc, imp: importe });
+  });
+
+  const nuevasFacturas = Object.keys(grupos).sort().map((fecha, i) => {
+    const lineas = grupos[fecha];
+    const total = lineas.reduce((s, l) => s + l.imp, 0);
+    return {
+      id: Date.now() + i,
+      num: `${prefijo}-${String(numInicial + i).padStart(4, '0')}`,
+      fecha,
+      concepto: `Pagos del ${formatDate(fecha)}`,
+      lineas,
+      total
+    };
+  });
+
+  // Preview
+  const prev = document.getElementById('preview-facturas');
+  prev.innerHTML = `
+    <div class="section-title">${nuevasFacturas.length} factura(s) generada(s)</div>
+    ${nuevasFacturas.map(f => `
+      <div class="invoice-card">
+        <div>
+          <div class="invoice-num">${f.num}</div>
+          <div class="invoice-meta">${formatDate(f.fecha)}</div>
+          <div style="margin-top:6px">${f.lineas.map(l => `<div style="font-size:12px;color:var(--gray-400)">— ${l.desc}: <strong>${l.imp.toFixed(2)}€</strong></div>`).join('')}</div>
+        </div>
+        <div class="invoice-amount">${f.total.toFixed(2)} €<small>TOTAL DÍA</small></div>
+      </div>
+    `).join('')}
+    <button class="btn btn-primary" style="margin-top:12px" onclick="confirmarFacturas(${JSON.stringify(nuevasFacturas).replace(/"/g, '&quot;')})">CONFIRMAR Y GUARDAR</button>
+  `;
+}
+
+function confirmarFacturas(facs) {
+  facturasVenta = [...facturasVenta, ...facs];
+  save();
+  renderFVenta();
+  // Switch tab
+  document.querySelectorAll('#page-fact-venta .tab-btn')[0].click();
+  alert('Facturas guardadas correctamente');
+}
+
+// ===== FACTURAS COMPRA =====
+function calcFC() {
+  const base = parseFloat(document.getElementById('fc-base').value) || 0;
+  const iva = parseFloat(document.getElementById('fc-iva').value) || 0;
+  const total = base * (1 + iva / 100);
+  document.getElementById('fc-total').value = total.toFixed(2) + ' €';
+}
+
+function guardarFCompra() {
+  const num = document.getElementById('fc-num').value.trim();
+  const fecha = document.getElementById('fc-fecha').value;
+  const proveedor = document.getElementById('fc-proveedor').value.trim();
+  const base = parseFloat(document.getElementById('fc-base').value) || 0;
+  const iva = parseFloat(document.getElementById('fc-iva').value) || 0;
+  const total = base * (1 + iva / 100);
+  const concepto = document.getElementById('fc-concepto').value.trim();
+  const estado = document.getElementById('fc-estado').value;
+
+  if (!num || !fecha) { alert('Número y fecha son obligatorios'); return; }
+
+  facturasCompra.push({ id: Date.now(), num, fecha, proveedor, base, iva, total, concepto, estado });
+  save();
+  closeModal('modal-fcompra');
+  renderFCompra();
+}
+
+function renderFCompra() {
+  const el = document.getElementById('facturas-compra-list');
+  if (facturasCompra.length === 0) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">🛒</div><div class="empty-text">No hay facturas de compra</div></div>`;
+    return;
+  }
+  el.innerHTML = facturasCompra.map(f => `
+    <div class="invoice-card">
+      <div>
+        <div class="invoice-num">${f.num}</div>
+        <div class="invoice-meta">${formatDate(f.fecha)} · ${f.proveedor || 'Sin proveedor'}</div>
+        <div style="margin-top:4px;font-size:12px;color:var(--gray-400)">${f.concepto || ''}</div>
+        <div style="margin-top:6px"><span class="stat-badge badge-${f.estado === 'pagada' ? 'green' : 'yellow'}">${f.estado}</span></div>
+      </div>
+      <div>
+        <div class="invoice-amount">${parseFloat(f.total).toFixed(2)} €<small>IVA ${f.iva}% incl.</small></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ===== UTILS =====
+function formatDate(d) {
+  if (!d) return '—';
+  const [y, m, day] = d.split('-');
+  return `${day}/${m}/${y}`;
+}
+
+
+// ===== PAGOS REGISTRO =====
+let pagosFiltro = 'todos';
+let pagosBusqueda = '';
+
+function getAllPagos() {
+  let all = [];
+  socios.forEach(s => {
+    (s.pagos || []).forEach(p => {
+      all.push({...p, socioNombre: s.nombre + ' ' + s.apellidos, socioId: s.id});
+    });
+  });
+  return all.sort((a, b) => b.fecha.localeCompare(a.fecha));
+}
+
+function filterPagos(f, el) {
+  pagosFiltro = f;
+  document.querySelectorAll('#pagos-filter-pills .pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  renderPagosTabla();
+}
+
+function searchPagos(q) { pagosBusqueda = q; renderPagosTabla(); }
+
+function renderPagosTabla() {
+  let pagos = getAllPagos();
+  if (pagosFiltro !== 'todos') pagos = pagos.filter(p => p.forma === pagosFiltro);
+  if (pagosBusqueda) {
+    const q = pagosBusqueda.toLowerCase();
+    pagos = pagos.filter(p => p.socioNombre.toLowerCase().includes(q) || p.concepto.toLowerCase().includes(q));
+  }
+
+  const tbody = document.getElementById('pagos-tbody');
+  if (pagos.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">No hay pagos</td></tr>`;
+  } else {
+    tbody.innerHTML = pagos.map(p => {
+      const formaColor = p.forma === 'TPV' ? 'badge-green' : p.forma === 'Efectivo' ? 'badge-yellow' : p.forma === 'Transferencia' ? 'badge-blue' : 'badge-gray';
+      return `<tr>
+        <td style="font-family:var(--font-display);letter-spacing:1px">${formatDate(p.fecha)}</td>
+        <td style="font-weight:600">${p.socioNombre}</td>
+        <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
+        <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
+        <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Totales por forma de pago
+  const totales = {};
+  let gran_total = 0;
+  pagos.forEach(p => {
+    if (!totales[p.forma]) totales[p.forma] = 0;
+    totales[p.forma] += parseFloat(p.importe);
+    gran_total += parseFloat(p.importe);
+  });
+
+  const formaColors = {TPV:'#52b788', Efectivo:'#e9c46a', Transferencia:'#74b3e8', Tarjeta:'#c084fc'};
+  document.getElementById('pagos-totales').innerHTML =
+    Object.entries(totales).map(([f, t]) =>
+      `<span style="font-family:var(--font-display);font-size:13px;color:${formaColors[f]||'#aaa'}">${f}: <strong>${t.toFixed(2)} €</strong></span>`
+    ).join('') +
+    `<span style="font-family:var(--font-display);font-size:14px;color:var(--white);margin-left:auto"><strong>TOTAL: ${gran_total.toFixed(2)} €</strong></span>`;
+}
+
+function generarFacturasDesdeRegistro() {
+  // Group all pagos by date
+  const grupos = {};
+  getAllPagos().forEach(p => {
+    if (!grupos[p.fecha]) grupos[p.fecha] = [];
+    grupos[p.fecha].push({desc: p.socioNombre + ' — ' + p.concepto, imp: parseFloat(p.importe), forma: p.forma});
+  });
+
+  const prefijo = 'FV';
+  let numInicial = facturasVenta.length + 1;
+
+  const nuevas = Object.keys(grupos).sort().map((fecha, i) => {
+    const lineas = grupos[fecha];
+    const total = lineas.reduce((s, l) => s + l.imp, 0);
+    return {
+      id: Date.now() + i,
+      num: prefijo + '-' + String(numInicial + i).padStart(4, '0'),
+      fecha,
+      concepto: 'Pagos del ' + formatDate(fecha),
+      lineas,
+      total
+    };
+  });
+
+  if (confirm(`Se generarán ${nuevas.length} facturas (una por día) con todos los pagos registrados. ¿Continuar?`)) {
+    facturasVenta = nuevas;
+    save();
+    alert('Facturas generadas correctamente');
+    navTo('fact-venta', document.querySelector('.nav-item:nth-child(9)'));
+  }
+}
+
+
+// ===== ENTRENAMIENTO PERSONAL =====
+let epSocioId = null;
+
+function verSesionesEP(id) {
+  epSocioId = id;
+  const s = socios.find(x => x.id === id);
+  document.getElementById('modal-ep-title').textContent = `Sesiones EP — ${s.nombre} ${s.apellidos}`;
+  document.getElementById('ep-nueva-fecha').value = new Date().toISOString().split('T')[0];
+  document.getElementById('ep-nueva-notas').value = '';
+  renderSesionesEP(s);
+  openModal('modal-ep-sesiones');
+}
+
+function renderSesionesEP(s) {
+  const completadas = s.sesTotales - s.sesRestantes;
+  document.getElementById('ep-completadas').textContent = completadas + '/' + s.sesTotales;
+  document.getElementById('ep-restantes').textContent = s.sesRestantes;
+  document.getElementById('ep-precio').textContent = (s.precioBono || 0) + ' €';
+
+  const lista = document.getElementById('ep-sesiones-lista');
+  if (!s.sesiones || s.sesiones.length === 0) {
+    lista.innerHTML = `<p style="color:var(--gray-400);font-size:13px;padding:12px 0">Sin sesiones registradas</p>`;
+    return;
+  }
+  lista.innerHTML = [...s.sesiones].reverse().map(ses => `
+    <div class="pago-row">
+      <div>
+        <div style="font-weight:600;font-size:13.5px">Sesión ${ses.num}</div>
+        <div style="font-size:12px;color:var(--gray-400)">${formatDate(ses.fecha)}${ses.notas ? ' · ' + ses.notas : ''}</div>
+      </div>
+      <span class="stat-badge badge-green">${ses.estado}</span>
+    </div>
+  `).join('');
+}
+
+function registrarSesionEP() {
+  const s = socios.find(x => x.id === epSocioId);
+  const fecha = document.getElementById('ep-nueva-fecha').value;
+  const notas = document.getElementById('ep-nueva-notas').value.trim();
+  if (!fecha) { alert('Selecciona una fecha'); return; }
+  if (s.sesRestantes <= 0) { alert('Este bono no tiene sesiones restantes'); return; }
+  if (!s.sesiones) s.sesiones = [];
+  const num = (s.sesiones.length > 0 ? Math.max(...s.sesiones.map(x => x.num)) : 0) + 1;
+  s.sesiones.push({ num, fecha, estado: 'Completada', notas });
+  s.sesRestantes = Math.max(0, s.sesRestantes - 1);
+  if (s.sesRestantes === 0) {
+    if (confirm('¡Bono completado! ¿Marcar al cliente como baja?')) {
+      s.estado = 'baja';
+      s.pago = 'baja';
+      s.baja = fecha;
+    }
+  }
+  save();
+  renderSesionesEP(s);
+  renderSocios();
+}
+
+
+function setSociosOrden(orden) {
+  sociosOrden = orden;
+  // Update button styles
+  const btnNombre = document.getElementById('btn-ord-nombre');
+  const btnAlta = document.getElementById('btn-ord-alta');
+  if (btnNombre) {
+    btnNombre.style.borderColor = orden === 'nombre' ? 'var(--red)' : 'var(--gray-600)';
+    btnNombre.style.color = orden === 'nombre' ? 'var(--white)' : 'var(--gray-300)';
+  }
+  if (btnAlta) {
+    btnAlta.style.borderColor = orden === 'alta' ? 'var(--red)' : 'var(--gray-600)';
+    btnAlta.style.color = orden === 'alta' ? 'var(--white)' : 'var(--gray-300)';
+  }
+  const icon = document.getElementById('sort-icon');
+  if (icon) icon.textContent = orden === 'alta' ? '↑' : '↕';
+  renderSocios();
+}
+
+function exportarSociosExcel() {
+  const rows = socios.map(s => ({
+    'ID': 'ID-' + String(s.id).padStart(4, '0'),
+    'Nombre': s.nombre,
+    'Apellidos': s.apellidos,
+    'DNI': s.dni || '',
+    'Teléfono': s.tel || '',
+    'Email': s.email || '',
+    'Fecha Alta': s.alta ? formatDate(s.alta) : '',
+    'Fecha Baja': s.baja ? formatDate(s.baja) : '',
+    'Tipo': s.tipo.toUpperCase(),
+    'Tarifa / Bono': s.tipo === 'tarifa' ? (s.tarifa || '').replace(/\s*\d{1,2}\/\d{4}(\s*-\s*\d{1,2}\/\d{4})?/g,'').trim() : s.tipo === 'ep' ? 'EP - Bono ' + s.sesTotales + ' ses.' : (s.bono || ''),
+    'Precio Bono (€)': s.precioBono || '',
+    'Sesiones Totales': s.sesTotales || '',
+    'Sesiones Restantes': s.sesRestantes || '',
+    'Estado': s.estado,
+    'Estado Pago': s.pago,
+    'Total Pagado (€)': (s.pagos || []).reduce((sum, p) => sum + parseFloat(p.importe || 0), 0).toFixed(2),
+    'Formas de Pago': [...new Set((s.pagos || []).map(p => p.forma).filter(Boolean))].join(', '),
+    'Último Pago': s.ultPago ? formatDate(s.ultPago) : '',
+    'Actividades': s.actividades || '',
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+
+  // Column widths
+  ws['!cols'] = [
+    {wch:8},{wch:14},{wch:18},{wch:12},{wch:14},{wch:28},{wch:12},{wch:12},
+    {wch:8},{wch:32},{wch:14},{wch:16},{wch:18},{wch:10},{wch:10},
+    {wch:16},{wch:18},{wch:12},{wch:20}
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Socios');
+
+  const fecha = new Date().toISOString().split('T')[0];
+  XLSX.writeFile(wb, `Codek_Socios_${fecha}.xlsx`);
+}
+
+
+// ===== NUEVO PAGO MANUAL =====
+function abrirModalNuevoPago() {
+  // Populate socio select
+  const sel = document.getElementById('np-manual-socio');
+  sel.innerHTML = '<option value="">— Seleccionar socio —</option>';
+  [...socios]
+    .sort((a,b) => (a.nombre+' '+a.apellidos).localeCompare(b.nombre+' '+b.apellidos, 'es'))
+    .forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.nombre + (s.apellidos ? ' ' + s.apellidos : '');
+      sel.appendChild(opt);
+    });
+  document.getElementById('np-manual-fecha').value = new Date().toISOString().split('T')[0];
+  document.getElementById('np-manual-importe').value = '';
+  document.getElementById('np-manual-concepto').value = '';
+  document.getElementById('np-manual-forma').value = 'Efectivo';
+}
+
+function guardarPagoManual() {
+  const socioId = parseInt(document.getElementById('np-manual-socio').value);
+  const fecha = document.getElementById('np-manual-fecha').value;
+  const importe = parseFloat(document.getElementById('np-manual-importe').value);
+  const concepto = document.getElementById('np-manual-concepto').value.trim();
+  const forma = document.getElementById('np-manual-forma').value;
+
+  if (!socioId) { alert('Selecciona un socio'); return; }
+  if (!fecha) { alert('Selecciona una fecha'); return; }
+  if (!importe || importe <= 0) { alert('Introduce un importe válido'); return; }
+  if (!concepto) { alert('Introduce un concepto'); return; }
+
+  const s = socios.find(x => x.id === socioId);
+  if (!s.pagos) s.pagos = [];
+  s.pagos.push({ fecha, concepto, importe, forma, id: Date.now() });
+  s.ultPago = fecha;
+  if (s.pago !== 'pagado') s.pago = 'pagado';
+  save();
+  closeModal('modal-nuevo-pago');
+  renderPagosTabla();
+  alert(`Pago de ${importe.toFixed(2)}€ registrado para ${s.nombre}`);
+}
+
+
+// ===== WELLHUB =====
+const MESES = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+function renderWellhub() {
+  const tbody = document.getElementById('wellhub-tbody');
+  const sorted = [...wellhubData].sort((a,b) => b.anyo !== a.anyo ? b.anyo - a.anyo : b.mes - a.mes);
+
+  if (sorted.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">Sin datos</td></tr>`;
+  } else {
+    tbody.innerHTML = sorted.map(w => {
+      const estadoBadge = w.estado === 'pagado'
+        ? `<span class="stat-badge badge-green">Pagado</span>`
+        : w.estado === 'enviado'
+        ? `<span class="stat-badge badge-blue">Enviado al banco</span>`
+        : `<span class="stat-badge badge-yellow">Pendiente</span>`;
+      return `<tr>
+        <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${MESES[w.mes]} ${w.anyo}</td>
+        <td style="font-family:var(--font-display);font-size:18px;font-weight:800">${parseFloat(w.importe).toFixed(2)} €</td>
+        <td>${estadoBadge}</td>
+        <td style="font-size:13px;color:var(--gray-400)">${w.notas || '—'}</td>
+        <td>
+          <div style="display:flex;gap:6px">
+            <button class="action-btn" onclick="editarWellhub(${w.id})">Editar</button>
+            <button class="action-btn" onclick="eliminarWellhub(${w.id})" style="color:var(--red)">×</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  const total = wellhubData.reduce((s,w) => s + parseFloat(w.importe), 0);
+  const media = wellhubData.length ? total / wellhubData.length : 0;
+  const mejor = wellhubData.length ? wellhubData.reduce((a,b) => parseFloat(a.importe) > parseFloat(b.importe) ? a : b) : null;
+
+  if (document.getElementById('wh-total')) {
+    document.getElementById('wh-total').textContent = total.toFixed(2) + ' €';
+    document.getElementById('wh-media').textContent = media.toFixed(2) + ' €';
+    document.getElementById('wh-meses').textContent = wellhubData.length;
+    document.getElementById('wh-total-footer').textContent = total.toFixed(2) + ' €';
+    if (mejor) {
+      document.getElementById('wh-mejor').textContent = parseFloat(mejor.importe).toFixed(2) + ' €';
+      document.getElementById('wh-mejor-mes').textContent = MESES[mejor.mes] + ' ' + mejor.anyo;
+    }
+  }
+}
+
+function guardarWellhub() {
+  const mes = parseInt(document.getElementById('wh-mes').value);
+  const anyo = parseInt(document.getElementById('wh-anyo').value);
+  const importe = parseFloat(document.getElementById('wh-importe').value);
+  const estado = document.getElementById('wh-estado').value;
+  const notas = document.getElementById('wh-notas').value.trim();
+  const editId = document.getElementById('wh-edit-id').value;
+
+  if (!mes || !anyo || !importe) { alert('Rellena mes, año e importe'); return; }
+
+  if (editId) {
+    const idx = wellhubData.findIndex(w => w.id === parseInt(editId));
+    if (idx > -1) wellhubData[idx] = { id: parseInt(editId), mes, anyo, importe, estado, notas };
+  } else {
+    wellhubData.push({ id: Date.now(), mes, anyo, importe, estado, notas });
+  }
+  save();
+  closeModal('modal-wellhub-nueva');
+  renderWellhub();
+}
+
+function editarWellhub(id) {
+  const w = wellhubData.find(x => x.id === id);
+  if (!w) return;
+  document.getElementById('modal-wh-title').textContent = 'Editar Factura Wellhub';
+  document.getElementById('wh-edit-id').value = w.id;
+  document.getElementById('wh-mes').value = w.mes;
+  document.getElementById('wh-anyo').value = w.anyo;
+  document.getElementById('wh-importe').value = w.importe;
+  document.getElementById('wh-estado').value = w.estado;
+  document.getElementById('wh-notas').value = w.notas || '';
+  openModal('modal-wellhub-nueva');
+}
+
+function eliminarWellhub(id) {
+  if (!confirm('¿Eliminar esta factura?')) return;
+  wellhubData = wellhubData.filter(w => w.id !== id);
+  save();
+  renderWellhub();
+}
+
+
+function buildDashMesSelector() {
+  const sel = document.getElementById('dash-mes-sel');
+  if (!sel) return;
+  const mesesSet = new Set();
+  socios.forEach(s => (s.pagos||[]).forEach(p => {
+    if (p.fecha) mesesSet.add(p.fecha.substring(0,7));
+  }));
+  wellhubData.forEach(w => mesesSet.add(w.anyo + '-' + String(w.mes).padStart(2,'0')));
+  const sorted = [...mesesSet].sort().reverse();
+  sel.innerHTML = '<option value="todos">Todos los meses</option>' + sorted.map(m => {
+    const [y, mo] = m.split('-');
+    return `<option value="${m}">${MESES[parseInt(mo)]} ${y}</option>`;
+  }).join('');
+  renderDashMes();
+}
+
+function renderDashMes() {
+  const sel = document.getElementById('dash-mes-sel');
+  if (!sel) return;
+  const mes = sel.value;
+  const todos = mes === 'todos';
+
+  let totTarifa = 0, totBono = 0, totEP = 0, totOtros = 0;
+  socios.forEach(s => {
+    (s.pagos||[]).forEach(p => {
+      if (!p.fecha) return;
+      if (!todos && !p.fecha.startsWith(mes)) return;
+      const imp = parseFloat(p.importe||0);
+      if (s.tipo === 'tarifa') totTarifa += imp;
+      else if (s.tipo === 'bono') totBono += imp;
+      else if (s.tipo === 'ep') totEP += imp;
+      else totOtros += imp;
+    });
+  });
+
+  let totWH = 0;
+  let whSub = 'sin dato';
+  if (todos) {
+    totWH = wellhubData.reduce((s,w) => s + parseFloat(w.importe||0), 0);
+    whSub = wellhubData.length + ' meses';
+  } else {
+    const [anyo, mesNum] = mes.split('-').map(Number);
+    const wh = wellhubData.find(w => w.anyo === anyo && w.mes === mesNum);
+    totWH = wh ? parseFloat(wh.importe) : 0;
+    whSub = wh ? wh.estado : 'sin dato';
+  }
+
+  const total = totTarifa + totBono + totEP + totWH + totOtros;
+
+  const cards = [
+    { label: 'Tarifa', valor: totTarifa, color: '#e07070', sub: 'cuotas mensuales', action: `irAPagosFiltrado('tarifa','${mes}')` },
+    { label: 'Bono', valor: totBono, color: '#74b3e8', sub: 'sesiones prepagadas', action: `irAPagosFiltrado('bono','${mes}')` },
+    { label: 'Entreno Personal', valor: totEP, color: '#c084fc', sub: 'EP', action: `irAPagosFiltrado('ep','${mes}')` },
+    { label: 'Wellhub', valor: totWH, color: '#52b788', sub: whSub, action: `irAWellhub()` },
+    { label: 'TOTAL', valor: total, color: '#f5f5f5', sub: todos ? 'acumulado total' : 'facturación del mes', big: true, action: `irAPagosFiltrado('todos','${mes}')` },
+  ];
+
+  document.getElementById('dash-mes-cards').innerHTML = cards.map(c => `
+    <div class="stat-card" style="${c.big ? 'border-color:var(--red);' : ''}cursor:pointer;transition:opacity 0.15s" onclick="${c.action}" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">
+      <div class="stat-label">${c.label}</div>
+      <div style="font-family:var(--font-display);font-size:${c.big?'26':'22'}px;font-weight:800;color:${c.color};line-height:1.1;margin:6px 0">${c.valor.toFixed(2)} €</div>
+      <div class="stat-sub">${c.sub} <span style="color:var(--gray-600);font-size:10px">→</span></div>
+    </div>
+  `).join('');
+}
+
+
+function irAWellhub() {
+  const navEl = document.querySelector('.nav-item[onclick*="wellhub"]');
+  navTo('wellhub', navEl);
+  window.scrollTo(0,0);
+}
+
+// filtro: 'tarifa'|'bono'|'ep'|'todos'   mes: 'YYYY-MM'|'todos'
+function irAPagosFiltrado(tipo, mes) {
+  // Navigate to pagos
+  const navEl = document.querySelector('.nav-item[onclick*=\'pagos\']');
+  navTo('pagos', navEl);
+
+  // Override getAllPagos with a filtered version for this view
+  window._pagosTipoFiltro = tipo;   // 'tarifa'|'bono'|'ep'|'todos'
+  window._pagosMesFiltro = mes;     // 'YYYY-MM'|'todos'
+
+  renderPagosTablaFiltrada();
+  window.scrollTo(0,0);
+}
+
+function renderPagosTablaFiltrada() {
+  const tipo = window._pagosTipoFiltro || 'todos';
+  const mes  = window._pagosMesFiltro  || 'todos';
+
+  let pagos = [];
+  socios.forEach(s => {
+    (s.pagos || []).forEach(p => {
+      // Filter by mes
+      if (mes !== 'todos' && (!p.fecha || !p.fecha.startsWith(mes))) return;
+      // Filter by tipo
+      if (tipo !== 'todos' && s.tipo !== tipo) return;
+      pagos.push({...p, socioNombre: s.nombre + ' ' + s.apellidos, socioId: s.id, socioTipo: s.tipo});
+    });
+  });
+  pagos.sort((a,b) => b.fecha.localeCompare(a.fecha));
+
+  // Update table header to show active filter
+  const title = document.querySelector('#page-pagos .table-header-title');
+  if (title) {
+    const tipoLabel = tipo === 'todos' ? 'Todos' : tipo === 'ep' ? 'Entreno Personal' : tipo.charAt(0).toUpperCase() + tipo.slice(1);
+    const mesLabel  = mes === 'todos' ? 'Todos los meses' : (() => { const [y,m] = mes.split('-'); return MESES[parseInt(m)] + ' ' + y; })();
+    title.innerHTML = `Registro de Pagos <span style="color:var(--red);font-size:12px;letter-spacing:1px"> · ${tipoLabel} · ${mesLabel}</span>
+      <button onclick="limpiarFiltroPagos()" style="margin-left:12px;background:transparent;border:1px solid var(--gray-600);color:var(--gray-400);font-size:10px;padding:2px 8px;cursor:pointer;font-family:var(--font-display);letter-spacing:1px">✕ LIMPIAR</button>`;
+  }
+
+  const tbody = document.getElementById('pagos-tbody');
+  if (pagos.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">Sin pagos para este filtro</td></tr>`;
+  } else {
+    tbody.innerHTML = pagos.map(p => {
+      const formaColor = p.forma === 'TPV' ? 'badge-green' : p.forma === 'Efectivo' ? 'badge-yellow' : p.forma === 'Transferencia' ? 'badge-blue' : 'badge-gray';
+      const tipoColor = p.socioTipo === 'ep' ? '#c084fc' : p.socioTipo === 'bono' ? '#74b3e8' : 'var(--gray-300)';
+      return `<tr>
+        <td style="font-family:var(--font-display);letter-spacing:1px">${formatDate(p.fecha)}</td>
+        <td style="font-weight:600">${p.socioNombre} <span style="font-size:11px;color:${tipoColor}">${p.socioTipo.toUpperCase()}</span></td>
+        <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
+        <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
+        <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Totals
+  const gran_total = pagos.reduce((s,p) => s + parseFloat(p.importe||0), 0);
+  const totales = {};
+  pagos.forEach(p => { totales[p.forma] = (totales[p.forma]||0) + parseFloat(p.importe||0); });
+  const formaColors = {TPV:'#52b788', Efectivo:'#e9c46a', Transferencia:'#74b3e8', Tarjeta:'#c084fc'};
+  document.getElementById('pagos-totales').innerHTML =
+    Object.entries(totales).map(([f,t]) =>
+      `<span style="font-family:var(--font-display);font-size:13px;color:${formaColors[f]||'#aaa'}">${f}: <strong>${t.toFixed(2)} €</strong></span>`
+    ).join('') +
+    `<span style="font-family:var(--font-display);font-size:14px;color:var(--white);margin-left:auto"><strong>TOTAL: ${gran_total.toFixed(2)} €</strong></span>`;
+}
+
+function limpiarFiltroPagos() {
+  window._pagosTipoFiltro = 'todos';
+  window._pagosMesFiltro = 'todos';
+  const title = document.querySelector('#page-pagos .table-header-title');
+  if (title) title.textContent = 'Registro de Pagos';
+  renderPagosTabla();
+}
+
+
+function irASociosFiltro(filtro) {
+  const navEl = document.querySelector('.nav-item[onclick*=\'socios\']');
+  navTo('socios', navEl);
+
+  // Clear all filters
+  filtrosFiltroActual.clear();
+  document.querySelectorAll('#socios-filter-pills .pill').forEach(p => p.classList.remove('active'));
+  busqueda = '';
+  const searchEl = document.querySelector('#page-socios .search-box');
+  if (searchEl) searchEl.value = '';
+
+  window._pendienteFiltro = false;
+  if (filtro === 'pendiente') {
+    window._pendienteFiltro = true;
+  } else if (filtro === 'activo') {
+    // Activos includes pausados - activate both pills
+    filtrosFiltroActual.add('activo');
+    filtrosFiltroActual.add('pausado');
+    document.querySelectorAll('#socios-filter-pills .pill').forEach(p => {
+      if (p.dataset.filter === 'activo' || p.dataset.filter === 'pausado') p.classList.add('active');
+    });
+  } else {
+    filtrosFiltroActual.add(filtro);
+    const pill = [...document.querySelectorAll('#socios-filter-pills .pill')].find(p => p.dataset.filter === filtro);
+    if (pill) pill.classList.add('active');
+  }
+
+  renderSocios();
+  window.scrollTo(0,0);
+}
+
+
+// ===== IMPORTAR EXCEL PAGOS =====
+function importarExcelPagos(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = ''; // reset so same file can be re-imported
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'binary', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { raw: false, dateNF: 'yyyy-mm-dd' });
+
+      // Build existing payment fingerprints to avoid duplicates
+      // fingerprint = fecha|socioNombre(lower)|importe
+      const existingKeys = new Set();
+      socios.forEach(s => {
+        (s.pagos || []).forEach(p => {
+          const key = `${p.fecha}|${(s.nombre + ' ' + s.apellidos).toLowerCase().trim()}|${parseFloat(p.importe).toFixed(2)}`;
+          existingKeys.add(key);
+        });
+      });
+
+      // Expected columns (flexible matching):
+      // Date/Fecha, Name/Nombre/Cliente/Socio, Amount/Importe/Cantidad, Concept/Concepto, Payment/Forma
+      let added = 0, skipped = 0, unmatched = [];
+
+      rows.forEach(row => {
+        // Detect column names flexibly
+        const keys = Object.keys(row);
+        const getCol = (...names) => {
+          for (const n of names) {
+            const k = keys.find(k => k.toLowerCase().includes(n.toLowerCase()));
+            if (k && row[k] !== undefined && row[k] !== '') return String(row[k]).trim();
+          }
+          return '';
+        };
+
+        // Parse date - could be serial number or string
+        let fechaRaw = getCol('fecha', 'date', 'día', 'dia', 'f.');
+        let fecha = '';
+        if (fechaRaw) {
+          // Try to parse as date string or serial
+          if (/^\d{5}$/.test(fechaRaw)) {
+            // Excel serial
+            const d = new Date(Date.UTC(1899, 11, 30) + parseInt(fechaRaw) * 86400000);
+            fecha = d.toISOString().split('T')[0];
+          } else if (/^\d{4}-\d{2}-\d{2}/.test(fechaRaw)) {
+            fecha = fechaRaw.substring(0, 10);
+          } else if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/.test(fechaRaw)) {
+            const parts = fechaRaw.split(/[\/\-]/);
+            fecha = parts[2] + '-' + parts[1].padStart(2,'0') + '-' + parts[0].padStart(2,'0');
+          } else {
+            fecha = fechaRaw.substring(0, 10);
+          }
+        }
+
+        if (!fecha) { skipped++; return; }
+
+        const nombreRaw = getCol('nombre', 'name', 'cliente', 'socio', 'etiqueta');
+        const importeRaw = getCol('importe', 'amount', 'cantidad', 'total', 'precio');
+        const concepto = getCol('concepto', 'concept', 'descripcion', 'descripción', 'tarifa', 'servicio') || nombreRaw;
+        const forma = getCol('forma', 'payment', 'pago', 'metodo', 'método') || 'TPV';
+        const importe = parseFloat((importeRaw || '0').replace(',', '.')) || 0;
+
+        if (!nombreRaw || importe === 0) { skipped++; return; }
+
+        // Match socio by name (fuzzy)
+        const nombreLower = nombreRaw.toLowerCase().trim();
+        let socio = socios.find(s => {
+          const sNombre = (s.nombre + ' ' + s.apellidos).toLowerCase().trim();
+          const sNombre2 = (s.apellidos + ' ' + s.nombre).toLowerCase().trim();
+          return sNombre === nombreLower || sNombre2 === nombreLower ||
+                 sNombre.includes(nombreLower) || nombreLower.includes(s.nombre.toLowerCase());
+        });
+
+        if (!socio) {
+          unmatched.push(nombreRaw);
+          skipped++;
+          return;
+        }
+
+        // Check duplicate
+        const key = `${fecha}|${(socio.nombre + ' ' + socio.apellidos).toLowerCase().trim()}|${importe.toFixed(2)}`;
+        if (existingKeys.has(key)) { skipped++; return; }
+
+        // Add payment
+        if (!socio.pagos) socio.pagos = [];
+        socio.pagos.push({ fecha, concepto, importe, forma, id: Date.now() + Math.random() });
+        socio.ultPago = socio.ultPago && socio.ultPago > fecha ? socio.ultPago : fecha;
+        existingKeys.add(key);
+        added++;
+      });
+
+      save();
+      renderPagosTabla();
+
+      let msg = `✓ ${added} pago(s) importado(s) correctamente.\n${skipped} omitido(s) (ya existían o sin datos).`;
+      if (unmatched.length > 0) {
+        const uniqueUnmatched = [...new Set(unmatched)];
+        msg += `\n\nSocios no encontrados (${uniqueUnmatched.length}):\n${uniqueUnmatched.join('\n')}`;
+      }
+      alert(msg);
+
+    } catch(err) {
+      alert('Error al leer el Excel: ' + err.message);
+    }
+  };
+  reader.readAsBinaryString(file);
+}
+
+// ===== RESET =====
+function resetearDatos() {
+  if (!confirm('¿Seguro que quieres resetear todos los datos? Se perderán los cambios y se cargarán los socios y pagos originales.')) return;
+  localStorage.removeItem('ck_socios');
+  localStorage.removeItem('ck_fventa');
+  localStorage.removeItem('ck_fcompra');
+  localStorage.removeItem('ck_wellhub');
+  location.reload();
+}
+
+// ===== INIT =====
+const SOCIOS_INICIALES = [{"id": 1000, "nombre": "Alejandra", "apellidos": "", "email": "alejandra_romoal@hotmail.com", "tel": "683332363", "alta": "2026-03-18", "baja": null, "tipo": "bono", "tarifa": "", "bono": "Bono 5", "sesTotales": 10, "sesRestantes": 10, "actividades": "", "pago": "pagado", "ultPago": "2026-03-18", "pagos": [{"fecha": "2026-03-18", "concepto": "Bono 5", "importe": 50, "forma": "Efectivo", "id": 0}], "estado": "activo"}, {"id": 1001, "nombre": "Alex", "apellidos": "", "email": "asougey4@gmail.com", "tel": "639716507", "alta": "2026-03-01", "baja": null, "tipo": "bono", "tarifa": "", "bono": "Bono 5", "sesTotales": 10, "sesRestantes": 10, "actividades": "", "pago": "pagado", "ultPago": "2026-03-01", "pagos": [{"fecha": "2026-03-01", "concepto": "Bono 5", "importe": 62.5, "forma": "Tarjeta", "id": 0}], "estado": "activo"}, {"id": 1002, "nombre": "Alex", "apellidos": "Lara Liebanas", "email": "laralieb93@gmail.com", "tel": "634888651", "alta": "2026-03-30", "baja": "2026-03-30", "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-03-30", "pagos": [{"fecha": "2026-03-30", "concepto": "4 Sesiones / Mes 3/2026 - 4/2026", "importe": 55, "forma": "TPV", "id": 0}], "estado": "baja"}, {"id": 1003, "nombre": "Ali", "apellidos": "", "email": "alioliole08@gmail.com", "tel": "610529184", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV", "id": 0}, {"fecha": "2026-05-01", "concepto": "8 Sesiones / Mes 4/2026", "importe": 15, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1004, "nombre": "Alvaro", "apellidos": "Cantero", "email": "cante92@hotmail.com", "tel": "690263080", "alta": "2026-02-12", "baja": "2026-02-12", "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-02-12", "pagos": [{"fecha": "2026-02-12", "concepto": "4 Sesiones / Mes 2/2026", "importe": 50, "forma": "TPV", "id": 0}], "estado": "baja"}, {"id": 1005, "nombre": "Ana", "apellidos": "Iglesias", "email": "anaiglesias9@hotmail.com", "tel": "660063891", "alta": "2026-04-13", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-13", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1006, "nombre": "Andrea", "apellidos": "Or", "email": "andrea.cr_14@hotmail.com", "tel": "", "alta": "2026-03-01", "baja": null, "tipo": "bono", "tarifa": "", "bono": "Bono 5", "sesTotales": 10, "sesRestantes": 10, "actividades": "", "pago": "pagado", "ultPago": "2026-03-01", "pagos": [{"fecha": "2026-03-01", "concepto": "Bono 5", "importe": 62.6, "forma": "Tarjeta", "id": 0}], "estado": "activo"}, {"id": 1007, "nombre": "Antonio", "apellidos": "Rivera Lidon", "email": "antoniorivera80@gmail.com", "tel": "661951809", "alta": "2026-04-08", "baja": null, "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV", "id": 0}, {"fecha": "2026-04-08", "concepto": "8 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1008, "nombre": "Barbara", "apellidos": "Yuste Zuazo", "email": "barbarayz@hotmail.com", "tel": "647929848", "alta": "2026-01-16", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pendiente", "ultPago": "2026-04-06", "pagos": [{"fecha": "2026-04-06", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV", "id": 0}, {"fecha": "2026-03-01", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV", "id": 1}, {"fecha": "2026-02-02", "concepto": "4 Sesiones / Mes 2/2026", "importe": 49.5, "forma": "TPV", "id": 2}, {"fecha": "2026-01-16", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 3}], "estado": "activo"}, {"id": 1009, "nombre": "Bea", "apellidos": "", "email": "beatrizlealmari@gmail.com", "tel": "609602168", "alta": "2026-04-17", "baja": null, "tipo": "bono", "tarifa": "", "bono": "Bono 10", "sesTotales": 10, "sesRestantes": 10, "actividades": "", "pago": "pagado", "ultPago": "2026-04-17", "pagos": [{"fecha": "2026-04-17", "concepto": "Bono 10", "importe": 120, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1010, "nombre": "Belen", "apellidos": "Vega", "email": "belenvediaz@gmail.com", "tel": "608516311", "alta": "2026-03-12", "baja": null, "tipo": "tarifa", "tarifa": "Racks 1h al Día", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "Racks 1h al Día 05/2026", "importe": 60, "forma": "TPV", "id": 0}, {"fecha": "2026-04-07", "concepto": "8 sesiones mix 04/2026", "importe": 85, "forma": "TPV", "id": 1}, {"fecha": "2026-03-12", "concepto": "8 sesiones mix 3/2026", "importe": 85, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1011, "nombre": "BIBI", "apellidos": "", "email": "bibianaruiz@outlook.es", "tel": "691774010", "alta": "2026-03-06", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV", "id": 1}, {"fecha": "2026-03-06", "concepto": "8 Sesiones / Mes 3/2026", "importe": 65, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1012, "nombre": "Brenda", "apellidos": "", "email": "bremonte77@gmail.com", "tel": "608881388", "alta": "2026-04-14", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + ilimitados Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + ilimitados Racks / Mes 05/2026", "importe": 100, "forma": "TPV", "id": 0}, {"fecha": "2026-04-14", "concepto": "12 Sesiones / Mes + ilimitados Racks / Mes 4/2026", "importe": 50, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1013, "nombre": "Carla", "apellidos": "Mori Muñoz", "email": "cmori@ucm.es", "tel": "662257617", "alta": "2026-01-23", "baja": "2026-03-01", "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-03-01", "pagos": [{"fecha": "2026-03-01", "concepto": "8 Sesiones / Mes 03/2026", "importe": 76.5, "forma": "TPV", "id": 0}, {"fecha": "2026-02-09", "concepto": "8 Sesiones / Mes 2/2026", "importe": 76.5, "forma": "TPV", "id": 1}, {"fecha": "2026-01-23", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 2}], "estado": "baja"}, {"id": 1014, "nombre": "Carlos", "apellidos": "Jimenez", "email": "charlie8r@hotmail.com", "tel": "627396161", "alta": "2026-04-20", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-20", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1015, "nombre": "Charlie", "apellidos": "", "email": "cigg.casas@gmail.com", "tel": "690217695", "alta": "2026-04-02", "baja": null, "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV", "id": 0}, {"fecha": "2026-04-02", "concepto": "8 Sesiones / Mes 3/2026 - 4/2026", "importe": 85, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1016, "nombre": "Clara", "apellidos": "", "email": "cfigares@gmail.com", "tel": "610953058", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026 - 5/2026", "importe": 95, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1017, "nombre": "Dante", "apellidos": "", "email": "barreradantehoracio@gmail.com", "tel": "+54 91154602017", "alta": "2026-05-04", "baja": null, "tipo": "tarifa", "tarifa": "Full", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-04", "pagos": [{"fecha": "2026-05-04", "concepto": "Full 5/2026", "importe": 110, "forma": "Efectivo", "id": 0}], "estado": "activo"}, {"id": 1018, "nombre": "David", "apellidos": "Lozano", "email": "davidolo90@hotmail.com", "tel": "695465441", "alta": "2026-02-25", "baja": null, "tipo": "tarifa", "tarifa": "Full", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "Full 05/2026", "importe": 110, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "Full 04/2026", "importe": 110, "forma": "TPV", "id": 1}, {"fecha": "2026-02-25", "concepto": "Full 2/2026 - 3/2026", "importe": 95, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1019, "nombre": "Eduardo", "apellidos": "Heredero", "email": "eduheredero17@gmail.com", "tel": "655659351", "alta": "2026-03-03", "baja": null, "tipo": "tarifa", "tarifa": "Edu", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-04", "pagos": [{"fecha": "2026-05-04", "concepto": "Edu 05/2026", "importe": 50, "forma": "TPV", "id": 0}, {"fecha": "2026-04-06", "concepto": "Edu 04/2026", "importe": 50, "forma": "TPV", "id": 1}, {"fecha": "2026-03-03", "concepto": "Edu 2/2026 - 3/2026", "importe": 50, "forma": "TPV", "id": 2}], "estado": "activo", "notaEspecial": "Tarifa mensual (Edu 50€) + EP en efectivo"}, {"id": 1020, "nombre": "Estefania", "apellidos": "Amaro Castañon", "email": "fanustika@hotmail.com", "tel": "", "alta": "2026-03-02", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV", "id": 1}, {"fecha": "2026-03-02", "concepto": "4 Sesiones / Mes 3/2026", "importe": 55, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1021, "nombre": "Francisco", "apellidos": "Fort", "email": "fco.fort@gmail.com", "tel": "659377597", "alta": "2026-02-28", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV", "id": 1}, {"fecha": "2026-02-28", "concepto": "4 Sesiones / Mes 2/2026 - 3/2026", "importe": 55, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1022, "nombre": "Frederique", "apellidos": "", "email": "ohayonfred@gmail.com", "tel": "635440680", "alta": "2026-03-17", "baja": "2026-04-01", "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-04-01", "pagos": [{"fecha": "2026-04-01", "concepto": "8 Sesiones / Mes 04/2026", "importe": 85, "forma": "TPV", "id": 0}, {"fecha": "2026-03-17", "concepto": "8 Sesiones / Mes 3/2026", "importe": 75, "forma": "TPV", "id": 1}], "estado": "baja"}, {"id": 1023, "nombre": "Gabriel", "apellidos": "", "email": "gabimatfontgar@gmail.com", "tel": "681277490", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026 - 5/2026", "importe": 95, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1024, "nombre": "Irene", "apellidos": "", "email": "irenecarrillo90@gmail.com", "tel": "690043247", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "1 Clase + Rack ilimitado", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "1 Clase + Rack ilimitado 4/2026 - 5/2026", "importe": 70, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1025, "nombre": "Javier", "apellidos": "Gil Beunza", "email": "jgilbeunza@gmail.com", "tel": "772290990", "alta": "2026-01-17", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pendiente", "ultPago": "2026-04-01", "pagos": [{"fecha": "2026-04-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 04/2026", "importe": 85, "forma": "TPV", "id": 0}, {"fecha": "2026-03-03", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 03/2026", "importe": 85, "forma": "TPV", "id": 1}, {"fecha": "2026-02-03", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 2/2026", "importe": 85, "forma": "TPV", "id": 2}, {"fecha": "2026-01-17", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 3}], "estado": "activo"}, {"id": 1026, "nombre": "Jonatan", "apellidos": "Henriquez Ussing", "email": "jonatanussing@gmail.com", "tel": "649078561", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + ilimitados Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + ilimitados Racks / Mes 4/2026 - 5/2026", "importe": 100, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1027, "nombre": "Julio", "apellidos": "", "email": "jgbreparaciones@gmail.com", "tel": "689432764", "alta": "2026-04-14", "baja": null, "tipo": "tarifa", "tarifa": "8 sesiones mix", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-04", "pagos": [{"fecha": "2026-05-04", "concepto": "8 sesiones mix 05/2026", "importe": 85, "forma": "Efectivo", "id": 0}, {"fecha": "2026-04-14", "concepto": "8 sesiones mix 4/2026", "importe": 45, "forma": "Efectivo", "id": 1}], "estado": "activo"}, {"id": 1028, "nombre": "Kike", "apellidos": "Fraces Arnau", "email": "efnar13@yahoo.es", "tel": "627920587", "alta": "2026-03-09", "baja": "2026-03-09", "tipo": "tarifa", "tarifa": "Racks 1h al Día", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-03-09", "pagos": [{"fecha": "2026-03-09", "concepto": "Racks 1h al Día 3/2026", "importe": 30, "forma": "TPV", "id": 0}], "estado": "baja"}, {"id": 1029, "nombre": "Leticia", "apellidos": "", "email": "l.gutierrez_66@hotmail.com", "tel": "640625712", "alta": "2026-04-15", "baja": null, "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV", "id": 0}, {"fecha": "2026-04-15", "concepto": "8 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1030, "nombre": "Lorena", "apellidos": "Martinez", "email": "lorenamartinezmartinez57@gmail.com", "tel": "666015265", "alta": "2026-02-06", "baja": "2026-02-06", "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-02-06", "pagos": [{"fecha": "2026-02-06", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 2/2026", "importe": 45, "forma": "Transferencia", "id": 0}], "estado": "baja"}, {"id": 1031, "nombre": "Marcos", "apellidos": "Cambronero Lorero", "email": "marcoscambronero@gmail.com", "tel": "606415113", "alta": "2026-01-16", "baja": null, "tipo": "tarifa", "tarifa": "Racks 1h al Día", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "Racks 1h al Día 05/2026", "importe": 54, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "Racks 1h al Día 04/2026", "importe": 54, "forma": "TPV", "id": 1}, {"fecha": "2026-03-01", "concepto": "Racks 1h al Día 03/2026", "importe": 54, "forma": "TPV", "id": 2}, {"fecha": "2026-02-08", "concepto": "Racks 1h al Día 02/2026", "importe": 54, "forma": "TPV", "id": 3}, {"fecha": "2026-01-16", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Transferencia", "id": 4}], "estado": "activo"}, {"id": 1032, "nombre": "Maria", "apellidos": "Azahara", "email": "maria.azahara.prifer@gmail.com", "tel": "626101842", "alta": "2026-02-06", "baja": null, "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "8 Sesiones / Mes 04/2026", "importe": 85, "forma": "TPV", "id": 1}, {"fecha": "2026-03-01", "concepto": "8 Sesiones / Mes 03/2026", "importe": 85, "forma": "TPV", "id": 2}, {"fecha": "2026-02-06", "concepto": "4 Sesiones / Mes 2/2026", "importe": 55, "forma": "TPV", "id": 3}], "estado": "activo"}, {"id": 1033, "nombre": "Maria", "apellidos": "Gomez", "email": "mgmartin.90@hotmail.com", "tel": "675827868", "alta": "2026-02-09", "baja": "2026-03-25", "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-03-25", "pagos": [{"fecha": "2026-03-25", "concepto": "4 Sesiones / Mes 3/2026 - 12/2026", "importe": 0, "forma": "Efectivo", "id": 0}, {"fecha": "2026-03-01", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV", "id": 1}, {"fecha": "2026-02-09", "concepto": "4 Sesiones / Mes 02/2026", "importe": 49.5, "forma": "TPV", "id": 2}], "estado": "baja"}, {"id": 1034, "nombre": "Maria", "apellidos": "Sol Rincon", "email": "mariasolrincon@gmail.com", "tel": "626129594", "alta": "2026-02-21", "baja": null, "tipo": "tarifa", "tarifa": "1 Clase + Rack ilimitado", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "1 Clase + Rack ilimitado 05/2026", "importe": 60, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "1 Clase + Rack ilimitado 04/2026", "importe": 60, "forma": "TPV", "id": 1}, {"fecha": "2026-02-21", "concepto": "1 Clase + Rack ilimitado 2/2026 - 3/2026", "importe": 60, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1035, "nombre": "Maria", "apellidos": "Vento Bolaño", "email": "mariavento.90@gmail.com", "tel": "652424875", "alta": "2026-01-16", "baja": null, "tipo": "tarifa", "tarifa": "Full", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "Full 05/2026", "importe": 70, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "Full 04/2026", "importe": 70, "forma": "TPV", "id": 1}, {"fecha": "2026-03-01", "concepto": "Full 03/2026", "importe": 70, "forma": "TPV", "id": 2}, {"fecha": "2026-02-03", "concepto": "Full 02/2026", "importe": 70, "forma": "TPV", "id": 3}, {"fecha": "2026-01-16", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 4}], "estado": "activo"}, {"id": 1036, "nombre": "Marta", "apellidos": "Galan Redondo", "email": "martagr80@gmail.com", "tel": "646246945", "alta": "2026-01-16", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 49.5, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV", "id": 1}, {"fecha": "2026-03-01", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV", "id": 2}, {"fecha": "2026-02-02", "concepto": "4 Sesiones / Mes 02/2026", "importe": 49.5, "forma": "TPV", "id": 3}, {"fecha": "2026-01-16", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 4}], "estado": "activo"}, {"id": 1037, "nombre": "Maximiliano", "apellidos": "", "email": "bassomax84@gmail.com", "tel": "615027054", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 4/2026 - 5/2026", "importe": 55, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1038, "nombre": "Melanie", "apellidos": "Cañuelo Hernandez", "email": "xuly_18vk@hotmail.com", "tel": "606887218", "alta": "2026-03-12", "baja": null, "tipo": "tarifa", "tarifa": "Racks 1h al Día", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "Racks 1h al Día 05/2026", "importe": 60, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "8 sesiones mix 04/2026", "importe": 85, "forma": "TPV", "id": 1}, {"fecha": "2026-03-12", "concepto": "8 sesiones mix 3/2026", "importe": 85, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1039, "nombre": "Miguel", "apellidos": "", "email": "miguelpk096@gmail.com", "tel": "696251067", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "8 Sesiones / Mes 4/2026 - 5/2026", "importe": 85, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1040, "nombre": "Nick", "apellidos": "", "email": "nicolas.vigil.mtz@gmail.com", "tel": "640644025", "alta": "2026-03-28", "baja": null, "tipo": "bono", "tarifa": "", "bono": "Bono 10", "sesTotales": 10, "sesRestantes": 10, "actividades": "", "pago": "pagado", "ultPago": "2026-03-28", "pagos": [{"fecha": "2026-03-28", "concepto": "Bono 10", "importe": 100, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1041, "nombre": "Nixt", "apellidos": "", "email": "nixtdf@icloud.com", "tel": "685707046", "alta": "2026-01-19", "baja": "2026-03-02", "tipo": "tarifa", "tarifa": "1 Clase + Rack ilimitado", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-03-02", "pagos": [{"fecha": "2026-03-02", "concepto": "1 Clase + Rack ilimitado 03/2026", "importe": 63, "forma": "TPV", "id": 0}, {"fecha": "2026-02-09", "concepto": "1 Clase + Rack ilimitado 2/2026", "importe": 63, "forma": "TPV", "id": 1}, {"fecha": "2026-01-19", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 2}], "estado": "baja"}, {"id": 1042, "nombre": "Omar", "apellidos": "Leardi", "email": "coleardi@gmail.com", "tel": "654279210", "alta": "2026-02-04", "baja": "2026-04-01", "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-04-01", "pagos": [{"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-03-01", "concepto": "4 Sesiones / Mes 03/2026", "importe": 55, "forma": "TPV", "id": 1}, {"fecha": "2026-02-04", "concepto": "4 Sesiones / Mes 2/2026", "importe": 55, "forma": "TPV", "id": 2}], "estado": "baja"}, {"id": 1043, "nombre": "Patricia", "apellidos": "Remon Bolaño", "email": "patriciaremonbolano@gmail.com", "tel": "662155115", "alta": "2026-01-30", "baja": null, "tipo": "bono", "tarifa": "", "bono": "Bono 10 (Descuento Familia 30%)", "sesTotales": 10, "sesRestantes": 10, "actividades": "", "pago": "pagado", "ultPago": "2026-01-30", "pagos": [{"fecha": "2026-01-30", "concepto": "Bono 10 (Descuento Familia 30%)", "importe": 120, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1044, "nombre": "Paula", "apellidos": "Karina", "email": "paulacasafus@yahoo.com.ar", "tel": "617552134", "alta": "2026-04-13", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-13", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1045, "nombre": "Paula", "apellidos": "Lopez", "email": "Plopezcabezas@hotmail.com", "tel": "605575323", "alta": "2026-02-06", "baja": "2026-02-06", "tipo": "tarifa", "tarifa": "8 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "baja", "ultPago": "2026-02-06", "pagos": [{"fecha": "2026-02-06", "concepto": "8 Sesiones / Mes 2/2026", "importe": 55, "forma": "Transferencia", "id": 0}], "estado": "baja"}, {"id": 1046, "nombre": "Pilar", "apellidos": "", "email": "Pilarc.ramon@gmail.com", "tel": "627983776", "alta": "2026-05-01", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026 - 5/2026", "importe": 95, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1047, "nombre": "Raul", "apellidos": "Casalengua Barbas", "email": "raulcasalengua@gmail.com", "tel": "610516543", "alta": "2026-01-16", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 49.5, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV", "id": 1}, {"fecha": "2026-03-26", "concepto": "Bono 10", "importe": 120, "forma": "TPV", "id": 2}, {"fecha": "2026-03-01", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV", "id": 3}, {"fecha": "2026-02-01", "concepto": "4 Sesiones / Mes 02/2026", "importe": 49.5, "forma": "TPV", "id": 4}, {"fecha": "2026-01-16", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 5}], "estado": "activo"}, {"id": 1048, "nombre": "Rosa", "apellidos": "", "email": "Rosamartinparra@outlook.es", "tel": "", "alta": "2026-04-02", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-02", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1049, "nombre": "Ruben", "apellidos": "Calzacorta Garcia", "email": "3737ruben@gmail.com", "tel": "692727735", "alta": "2026-02-27", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 05/2026", "importe": 95, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 04/2026", "importe": 95, "forma": "TPV", "id": 1}, {"fecha": "2026-02-27", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 2/2026 - 3/2026", "importe": 95, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1050, "nombre": "Sandra", "apellidos": "", "email": "Sandra.merino.avila@gmail.com", "tel": "629101505", "alta": "2026-03-11", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 05/2026", "importe": 95, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 04/2026", "importe": 95, "forma": "TPV", "id": 1}, {"fecha": "2026-03-11", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 3/2026", "importe": 95, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 1051, "nombre": "Sara", "apellidos": "Fernandez", "email": "sara123fer@gmail.com", "tel": "677836446", "alta": "2026-04-10", "baja": null, "tipo": "tarifa", "tarifa": "12 Sesiones / Mes + 4 Racks / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 05/2026", "importe": 95, "forma": "TPV", "id": 0}, {"fecha": "2026-04-10", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026", "importe": 30, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1052, "nombre": "Sara", "apellidos": "Remon", "email": "sremonb99@gmail.com", "tel": "626547321", "alta": "2026-01-30", "baja": null, "tipo": "bono", "tarifa": "", "bono": "Bono 10 (Descuento Familia 30%)", "sesTotales": 10, "sesRestantes": 10, "actividades": "", "pago": "pagado", "ultPago": "2026-01-30", "pagos": [{"fecha": "2026-01-30", "concepto": "Bono 10 (Descuento Familia 30%)", "importe": 120, "forma": "TPV", "id": 0}], "estado": "activo"}, {"id": 1053, "nombre": "Sergio", "apellidos": "Perez Villalon", "email": "sergiopervi@gmail.com", "tel": "658744932", "alta": "2026-01-16", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 49.5, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV", "id": 1}, {"fecha": "2026-03-01", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV", "id": 2}, {"fecha": "2026-02-05", "concepto": "4 Sesiones / Mes 2/2026", "importe": 49.5, "forma": "TPV", "id": 3}, {"fecha": "2026-01-16", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 4}], "estado": "activo"}, {"id": 1054, "nombre": "Sylvia", "apellidos": "Santos Cabrera", "email": "ssantoscab@gmail.com", "tel": "618028529", "alta": "2026-01-20", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pausado", "ultPago": "2026-03-01", "pagos": [{"fecha": "2026-03-01", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV", "id": 0}, {"fecha": "2026-02-05", "concepto": "4 Sesiones / Mes 2/2026", "importe": 49.5, "forma": "TPV", "id": 1}, {"fecha": "2026-01-20", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta", "id": 2}], "estado": "pausado"}, {"id": 1055, "nombre": "Tatiana", "apellidos": "", "email": "tatigil1979@gmail.com", "tel": "637351046", "alta": "2026-02-03", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV", "id": 1}, {"fecha": "2026-03-05", "concepto": "4 Sesiones / Mes 3/2026", "importe": 50, "forma": "TPV", "id": 2}, {"fecha": "2026-02-03", "concepto": "4 Sesiones / Mes 2/2026", "importe": 40, "forma": "Tarjeta", "id": 3}], "estado": "activo"}, {"id": 1056, "nombre": "Tatiana2", "apellidos": "", "email": "tatylo@hotmail.com", "tel": "631114505", "alta": "2026-04-15", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-15", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV", "id": 1}], "estado": "activo"}, {"id": 1057, "nombre": "Veronica", "apellidos": "", "email": "valverde.veros@gmail.com", "tel": "629301394", "alta": "2026-02-24", "baja": null, "tipo": "tarifa", "tarifa": "4 Sesiones / Mes", "bono": null, "sesTotales": null, "sesRestantes": null, "actividades": "", "pago": "pagado", "ultPago": "2026-05-01", "pagos": [{"fecha": "2026-05-01", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV", "id": 0}, {"fecha": "2026-04-01", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV", "id": 1}, {"fecha": "2026-02-24", "concepto": "4 Sesiones / Mes 2/2026 - 3/2026", "importe": 55, "forma": "TPV", "id": 2}], "estado": "activo"}, {"id": 2000, "nombre": "Estefanía", "apellidos": "", "email": "", "tel": "603815377", "alta": "2026-04-17", "baja": null, "tipo": "ep", "tarifa": "", "bono": null, "sesTotales": 16, "sesRestantes": 13, "precioBono": 560, "actividades": "Entrenamiento Personal", "pago": "pagado", "ultPago": "2026-04-17", "estado": "activo", "formaPago": "efectivo", "pagos": [{"fecha": "2026-04-17", "concepto": "Bono 16 sesiones EP", "importe": 560, "forma": "Efectivo", "id": 0}], "sesiones": [{"num": 1, "fecha": "2026-04-17", "estado": "Completada", "notas": ""}, {"num": 2, "fecha": "2026-04-20", "estado": "Completada", "notas": ""}, {"num": 3, "fecha": "2026-04-27", "estado": "Completada", "notas": ""}]}, {"id": 2001, "nombre": "Maribel", "apellidos": "", "email": "", "tel": "639444247", "alta": "2026-04-21", "baja": null, "tipo": "ep", "tarifa": "", "bono": null, "sesTotales": 8, "sesRestantes": 6, "precioBono": 335, "actividades": "Entrenamiento Personal", "pago": "pagado", "ultPago": "2026-04-21", "estado": "activo", "formaPago": "tarjeta", "pagos": [{"fecha": "2026-04-21", "concepto": "Bono 8 sesiones EP", "importe": 335, "forma": "Tarjeta", "id": 0}], "sesiones": [{"num": 1, "fecha": "2026-04-22", "estado": "Completada", "notas": ""}, {"num": 2, "fecha": "2026-04-29", "estado": "Completada", "notas": ""}]}, {"id": 2002, "nombre": "José Luis", "apellidos": "", "email": "", "tel": "679754082", "alta": "2026-04-12", "baja": null, "tipo": "ep", "tarifa": "", "bono": null, "sesTotales": 16, "sesRestantes": 10, "precioBono": 608, "actividades": "Entrenamiento Personal", "pago": "pagado", "ultPago": "2026-04-12", "estado": "activo", "formaPago": "efectivo", "pagos": [{"fecha": "2026-04-12", "concepto": "Bono 16 sesiones EP", "importe": 608, "forma": "Efectivo", "id": 0}], "sesiones": [{"num": 1, "fecha": "2026-04-14", "estado": "Completada", "notas": ""}, {"num": 2, "fecha": "2026-04-16", "estado": "Completada", "notas": ""}, {"num": 3, "fecha": "2026-04-21", "estado": "Completada", "notas": ""}, {"num": 4, "fecha": "2026-04-23", "estado": "Completada", "notas": ""}, {"num": 5, "fecha": "2026-04-28", "estado": "Completada", "notas": ""}, {"num": 6, "fecha": "2026-04-30", "estado": "Completada", "notas": ""}]}, {"id": 2003, "nombre": "Patty", "apellidos": "", "email": "", "tel": "626405011", "alta": "2026-04-30", "baja": null, "tipo": "ep", "tarifa": "", "bono": null, "sesTotales": 4, "sesRestantes": 4, "precioBono": 180, "actividades": "Entrenamiento Personal", "pago": "pagado", "ultPago": "2026-04-30", "estado": "activo", "formaPago": "tarjeta", "pagos": [{"fecha": "2026-04-30", "concepto": "Bono 4 sesiones EP", "importe": 180, "forma": "Tarjeta", "id": 0}], "sesiones": []}];
+const FACTURAS_INICIALES = [{"id": 1, "num": "FV-0001", "fecha": "2026-01-16", "concepto": "Pagos del 16/01/2026", "lineas": [{"nombre": "Sergio Perez Villalon", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}, {"nombre": "Raul Casalengua Barbas", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}, {"nombre": "Marta Galan Redondo", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}, {"nombre": "Marcos Cambronero Lorero", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Transferencia"}, {"nombre": "Barbara Yuste Zuazo", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}, {"nombre": "Maria Vento Bolaño", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}], "total": 270}, {"id": 2, "num": "FV-0002", "fecha": "2026-01-17", "concepto": "Pagos del 17/01/2026", "lineas": [{"nombre": "Javier Gil Beunza", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}], "total": 45}, {"id": 3, "num": "FV-0003", "fecha": "2026-01-19", "concepto": "Pagos del 19/01/2026", "lineas": [{"nombre": "Nixt", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}], "total": 45}, {"id": 4, "num": "FV-0004", "fecha": "2026-01-20", "concepto": "Pagos del 20/01/2026", "lineas": [{"nombre": "Sylvia Santos Cabrera", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}], "total": 45}, {"id": 5, "num": "FV-0005", "fecha": "2026-01-23", "concepto": "Pagos del 23/01/2026", "lineas": [{"nombre": "Carla Mori Muñoz", "concepto": "SOCIO FUNDADOR", "importe": 45, "forma": "Tarjeta"}], "total": 45}, {"id": 6, "num": "FV-0006", "fecha": "2026-01-30", "concepto": "Pagos del 30/01/2026", "lineas": [{"nombre": "Sara Remon", "concepto": "Bono 10 (Descuento Familia 30%)", "importe": 120, "forma": "TPV"}, {"nombre": "Patricia Remon Bolaño", "concepto": "Bono 10 (Descuento Familia 30%)", "importe": 120, "forma": "TPV"}], "total": 240}, {"id": 7, "num": "FV-0007", "fecha": "2026-02-01", "concepto": "Pagos del 01/02/2026", "lineas": [{"nombre": "Raul Casalengua Barbas", "concepto": "4 Sesiones / Mes 02/2026", "importe": 49.5, "forma": "TPV"}], "total": 49.5}, {"id": 8, "num": "FV-0008", "fecha": "2026-02-02", "concepto": "Pagos del 02/02/2026", "lineas": [{"nombre": "Marta Galan Redondo", "concepto": "4 Sesiones / Mes 02/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Barbara Yuste Zuazo", "concepto": "4 Sesiones / Mes 2/2026", "importe": 49.5, "forma": "TPV"}], "total": 99.0}, {"id": 9, "num": "FV-0009", "fecha": "2026-02-03", "concepto": "Pagos del 03/02/2026", "lineas": [{"nombre": "Tatiana", "concepto": "4 Sesiones / Mes 2/2026", "importe": 40, "forma": "Tarjeta"}, {"nombre": "Javier Gil Beunza", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 2/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Maria Vento Bolaño", "concepto": "Full 02/2026", "importe": 70, "forma": "TPV"}], "total": 195}, {"id": 10, "num": "FV-0010", "fecha": "2026-02-04", "concepto": "Pagos del 04/02/2026", "lineas": [{"nombre": "Omar Leardi", "concepto": "4 Sesiones / Mes 2/2026", "importe": 55, "forma": "TPV"}], "total": 55}, {"id": 11, "num": "FV-0011", "fecha": "2026-02-05", "concepto": "Pagos del 05/02/2026", "lineas": [{"nombre": "Sylvia Santos Cabrera", "concepto": "4 Sesiones / Mes 2/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Sergio Perez Villalon", "concepto": "4 Sesiones / Mes 2/2026", "importe": 49.5, "forma": "TPV"}], "total": 99.0}, {"id": 12, "num": "FV-0012", "fecha": "2026-02-06", "concepto": "Pagos del 06/02/2026", "lineas": [{"nombre": "Maria Azahara", "concepto": "4 Sesiones / Mes 2/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Lorena Martinez", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 2/2026", "importe": 45, "forma": "Transferencia"}, {"nombre": "Paula Lopez", "concepto": "8 Sesiones / Mes 2/2026", "importe": 55, "forma": "Transferencia"}], "total": 155}, {"id": 13, "num": "FV-0013", "fecha": "2026-02-08", "concepto": "Pagos del 08/02/2026", "lineas": [{"nombre": "Marcos Cambronero Lorero", "concepto": "Racks 1h al Día 02/2026", "importe": 54, "forma": "TPV"}], "total": 54}, {"id": 14, "num": "FV-0014", "fecha": "2026-02-09", "concepto": "Pagos del 09/02/2026", "lineas": [{"nombre": "Maria Gomez", "concepto": "4 Sesiones / Mes 02/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Carla Mori Muñoz", "concepto": "8 Sesiones / Mes 2/2026", "importe": 76.5, "forma": "TPV"}, {"nombre": "Nixt", "concepto": "1 Clase + Rack ilimitado 2/2026", "importe": 63, "forma": "TPV"}], "total": 189.0}, {"id": 15, "num": "FV-0015", "fecha": "2026-02-12", "concepto": "Pagos del 12/02/2026", "lineas": [{"nombre": "Alvaro Cantero", "concepto": "4 Sesiones / Mes 2/2026", "importe": 50, "forma": "TPV"}], "total": 50}, {"id": 16, "num": "FV-0016", "fecha": "2026-02-21", "concepto": "Pagos del 21/02/2026", "lineas": [{"nombre": "Maria Sol Rincon", "concepto": "1 Clase + Rack ilimitado 2/2026 - 3/2026", "importe": 60, "forma": "TPV"}], "total": 60}, {"id": 17, "num": "FV-0017", "fecha": "2026-02-24", "concepto": "Pagos del 24/02/2026", "lineas": [{"nombre": "Veronica", "concepto": "4 Sesiones / Mes 2/2026 - 3/2026", "importe": 55, "forma": "TPV"}], "total": 55}, {"id": 18, "num": "FV-0018", "fecha": "2026-02-25", "concepto": "Pagos del 25/02/2026", "lineas": [{"nombre": "David Lozano", "concepto": "Full 2/2026 - 3/2026", "importe": 95, "forma": "TPV"}], "total": 95}, {"id": 19, "num": "FV-0019", "fecha": "2026-02-27", "concepto": "Pagos del 27/02/2026", "lineas": [{"nombre": "Ruben Calzacorta Garcia", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 2/2026 - 3/2026", "importe": 95, "forma": "TPV"}], "total": 95}, {"id": 20, "num": "FV-0020", "fecha": "2026-02-28", "concepto": "Pagos del 28/02/2026", "lineas": [{"nombre": "Francisco Fort", "concepto": "4 Sesiones / Mes 2/2026 - 3/2026", "importe": 55, "forma": "TPV"}], "total": 55}, {"id": 21, "num": "FV-0021", "fecha": "2026-03-01", "concepto": "Pagos del 01/03/2026", "lineas": [{"nombre": "Andrea Or", "concepto": "Bono 5", "importe": 62.6, "forma": "Tarjeta"}, {"nombre": "Alex", "concepto": "Bono 5", "importe": 62.5, "forma": "Tarjeta"}, {"nombre": "Carla Mori Muñoz", "concepto": "8 Sesiones / Mes 03/2026", "importe": 76.5, "forma": "TPV"}, {"nombre": "Sylvia Santos Cabrera", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Sergio Perez Villalon", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Raul Casalengua Barbas", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Omar Leardi", "concepto": "4 Sesiones / Mes 03/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Marta Galan Redondo", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Maria Azahara", "concepto": "8 Sesiones / Mes 03/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Maria Gomez", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Maria Vento Bolaño", "concepto": "Full 03/2026", "importe": 70, "forma": "TPV"}, {"nombre": "Marcos Cambronero Lorero", "concepto": "Racks 1h al Día 03/2026", "importe": 54, "forma": "TPV"}, {"nombre": "Barbara Yuste Zuazo", "concepto": "4 Sesiones / Mes 03/2026", "importe": 49.5, "forma": "TPV"}], "total": 762.6}, {"id": 22, "num": "FV-0022", "fecha": "2026-03-02", "concepto": "Pagos del 02/03/2026", "lineas": [{"nombre": "Estefania Amaro Castañon", "concepto": "4 Sesiones / Mes 3/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Nixt", "concepto": "1 Clase + Rack ilimitado 03/2026", "importe": 63, "forma": "TPV"}], "total": 118}, {"id": 23, "num": "FV-0023", "fecha": "2026-03-03", "concepto": "Pagos del 03/03/2026", "lineas": [{"nombre": "Javier Gil Beunza", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 03/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Eduardo Heredero", "concepto": "Edu 2/2026 - 3/2026", "importe": 50, "forma": "TPV"}], "total": 135}, {"id": 24, "num": "FV-0024", "fecha": "2026-03-05", "concepto": "Pagos del 05/03/2026", "lineas": [{"nombre": "Tatiana", "concepto": "4 Sesiones / Mes 3/2026", "importe": 50, "forma": "TPV"}], "total": 50}, {"id": 25, "num": "FV-0025", "fecha": "2026-03-06", "concepto": "Pagos del 06/03/2026", "lineas": [{"nombre": "BIBI", "concepto": "8 Sesiones / Mes 3/2026", "importe": 65, "forma": "TPV"}], "total": 65}, {"id": 26, "num": "FV-0026", "fecha": "2026-03-09", "concepto": "Pagos del 09/03/2026", "lineas": [{"nombre": "Kike Fraces Arnau", "concepto": "Racks 1h al Día 3/2026", "importe": 30, "forma": "TPV"}], "total": 30}, {"id": 27, "num": "FV-0027", "fecha": "2026-03-11", "concepto": "Pagos del 11/03/2026", "lineas": [{"nombre": "Sandra", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 3/2026", "importe": 95, "forma": "TPV"}], "total": 95}, {"id": 28, "num": "FV-0028", "fecha": "2026-03-12", "concepto": "Pagos del 12/03/2026", "lineas": [{"nombre": "Belen Vega", "concepto": "8 sesiones mix 3/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Melanie Cañuelo Hernandez", "concepto": "8 sesiones mix 3/2026", "importe": 85, "forma": "TPV"}], "total": 170}, {"id": 29, "num": "FV-0029", "fecha": "2026-03-17", "concepto": "Pagos del 17/03/2026", "lineas": [{"nombre": "Frederique", "concepto": "8 Sesiones / Mes 3/2026", "importe": 75, "forma": "TPV"}], "total": 75}, {"id": 30, "num": "FV-0030", "fecha": "2026-03-18", "concepto": "Pagos del 18/03/2026", "lineas": [{"nombre": "Alejandra", "concepto": "Bono 5", "importe": 50, "forma": "Efectivo"}], "total": 50}, {"id": 31, "num": "FV-0031", "fecha": "2026-03-25", "concepto": "Pagos del 25/03/2026", "lineas": [{"nombre": "Maria Gomez", "concepto": "4 Sesiones / Mes 3/2026 - 12/2026", "importe": 0, "forma": "Efectivo"}], "total": 0}, {"id": 32, "num": "FV-0032", "fecha": "2026-03-26", "concepto": "Pagos del 26/03/2026", "lineas": [{"nombre": "Raul Casalengua Barbas", "concepto": "Bono 10", "importe": 120, "forma": "TPV"}], "total": 120}, {"id": 33, "num": "FV-0033", "fecha": "2026-03-28", "concepto": "Pagos del 28/03/2026", "lineas": [{"nombre": "Nick", "concepto": "Bono 10", "importe": 100, "forma": "TPV"}], "total": 100}, {"id": 34, "num": "FV-0034", "fecha": "2026-03-30", "concepto": "Pagos del 30/03/2026", "lineas": [{"nombre": "Alex Lara Liebanas", "concepto": "4 Sesiones / Mes 3/2026 - 4/2026", "importe": 55, "forma": "TPV"}], "total": 55}, {"id": 35, "num": "FV-0035", "fecha": "2026-04-01", "concepto": "Pagos del 01/04/2026", "lineas": [{"nombre": "Veronica", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Tatiana", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Sergio Perez Villalon", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Sandra", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 04/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Ruben Calzacorta Garcia", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 04/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Raul Casalengua Barbas", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Omar Leardi", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Melanie Cañuelo Hernandez", "concepto": "8 sesiones mix 04/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Maria Sol Rincon", "concepto": "1 Clase + Rack ilimitado 04/2026", "importe": 60, "forma": "TPV"}, {"nombre": "Marta Galan Redondo", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Maria Azahara", "concepto": "8 Sesiones / Mes 04/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Maria Vento Bolaño", "concepto": "Full 04/2026", "importe": 70, "forma": "TPV"}, {"nombre": "Javier Gil Beunza", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 04/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Marcos Cambronero Lorero", "concepto": "Racks 1h al Día 04/2026", "importe": 54, "forma": "TPV"}, {"nombre": "Frederique", "concepto": "8 Sesiones / Mes 04/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Estefania Amaro Castañon", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Francisco Fort", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV"}, {"nombre": "David Lozano", "concepto": "Full 04/2026", "importe": 110, "forma": "TPV"}, {"nombre": "BIBI", "concepto": "4 Sesiones / Mes 04/2026", "importe": 55, "forma": "TPV"}], "total": 1302.5}, {"id": 36, "num": "FV-0036", "fecha": "2026-04-02", "concepto": "Pagos del 02/04/2026", "lineas": [{"nombre": "Rosa", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Charlie", "concepto": "8 Sesiones / Mes 3/2026 - 4/2026", "importe": 85, "forma": "TPV"}], "total": 140}, {"id": 37, "num": "FV-0037", "fecha": "2026-04-06", "concepto": "Pagos del 06/04/2026", "lineas": [{"nombre": "Barbara Yuste Zuazo", "concepto": "4 Sesiones / Mes 04/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Eduardo Heredero", "concepto": "Edu 04/2026", "importe": 50, "forma": "TPV"}], "total": 99.5}, {"id": 38, "num": "FV-0038", "fecha": "2026-04-07", "concepto": "Pagos del 07/04/2026", "lineas": [{"nombre": "Belen Vega", "concepto": "8 sesiones mix 04/2026", "importe": 85, "forma": "TPV"}], "total": 85}, {"id": 39, "num": "FV-0039", "fecha": "2026-04-08", "concepto": "Pagos del 08/04/2026", "lineas": [{"nombre": "Antonio Rivera Lidon", "concepto": "8 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV"}], "total": 55}, {"id": 40, "num": "FV-0040", "fecha": "2026-04-10", "concepto": "Pagos del 10/04/2026", "lineas": [{"nombre": "Sara Fernandez", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026", "importe": 30, "forma": "TPV"}], "total": 30}, {"id": 41, "num": "FV-0041", "fecha": "2026-04-13", "concepto": "Pagos del 13/04/2026", "lineas": [{"nombre": "Ana Iglesias", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Paula Karina", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV"}], "total": 110}, {"id": 42, "num": "FV-0042", "fecha": "2026-04-14", "concepto": "Pagos del 14/04/2026", "lineas": [{"nombre": "Brenda", "concepto": "12 Sesiones / Mes + ilimitados Racks / Mes 4/2026", "importe": 50, "forma": "TPV"}, {"nombre": "Julio", "concepto": "8 sesiones mix 4/2026", "importe": 45, "forma": "Efectivo"}], "total": 95}, {"id": 43, "num": "FV-0043", "fecha": "2026-04-15", "concepto": "Pagos del 15/04/2026", "lineas": [{"nombre": "Leticia", "concepto": "8 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Tatiana2", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV"}], "total": 110}, {"id": 44, "num": "FV-0044", "fecha": "2026-04-17", "concepto": "Pagos del 17/04/2026", "lineas": [{"nombre": "Bea", "concepto": "Bono 10", "importe": 120, "forma": "TPV"}], "total": 120}, {"id": 45, "num": "FV-0045", "fecha": "2026-04-20", "concepto": "Pagos del 20/04/2026", "lineas": [{"nombre": "Carlos Jimenez", "concepto": "4 Sesiones / Mes 4/2026", "importe": 55, "forma": "TPV"}], "total": 55}, {"id": 46, "num": "FV-0046", "fecha": "2026-05-01", "concepto": "Pagos del 01/05/2026", "lineas": [{"nombre": "Maria Vento Bolaño", "concepto": "Full 05/2026", "importe": 70, "forma": "TPV"}, {"nombre": "Clara", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026 - 5/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Irene", "concepto": "1 Clase + Rack ilimitado 4/2026 - 5/2026", "importe": 70, "forma": "TPV"}, {"nombre": "Veronica", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Tatiana", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Tatiana2", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Sergio Perez Villalon", "concepto": "4 Sesiones / Mes 05/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Sara Fernandez", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 05/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Ruben Calzacorta Garcia", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 05/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Sandra", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 05/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Raul Casalengua Barbas", "concepto": "4 Sesiones / Mes 05/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Rosa", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Paula Karina", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Marta Galan Redondo", "concepto": "4 Sesiones / Mes 05/2026", "importe": 49.5, "forma": "TPV"}, {"nombre": "Melanie Cañuelo Hernandez", "concepto": "Racks 1h al Día 05/2026", "importe": 60, "forma": "TPV"}, {"nombre": "Maria Azahara", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Maria Sol Rincon", "concepto": "1 Clase + Rack ilimitado 05/2026", "importe": 60, "forma": "TPV"}, {"nombre": "Marcos Cambronero Lorero", "concepto": "Racks 1h al Día 05/2026", "importe": 54, "forma": "TPV"}, {"nombre": "Leticia", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Francisco Fort", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Estefania Amaro Castañon", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "David Lozano", "concepto": "Full 05/2026", "importe": 110, "forma": "TPV"}, {"nombre": "Charlie", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Carlos Jimenez", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "BIBI", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Brenda", "concepto": "12 Sesiones / Mes + ilimitados Racks / Mes 05/2026", "importe": 100, "forma": "TPV"}, {"nombre": "Belen Vega", "concepto": "Racks 1h al Día 05/2026", "importe": 60, "forma": "TPV"}, {"nombre": "Antonio Rivera Lidon", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Ana Iglesias", "concepto": "4 Sesiones / Mes 05/2026", "importe": 55, "forma": "TPV"}, {"nombre": "Ali", "concepto": "8 Sesiones / Mes 05/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Jonatan Henriquez Ussing", "concepto": "12 Sesiones / Mes + ilimitados Racks / Mes 4/2026 - 5/2026", "importe": 100, "forma": "TPV"}, {"nombre": "Miguel", "concepto": "8 Sesiones / Mes 4/2026 - 5/2026", "importe": 85, "forma": "TPV"}, {"nombre": "Pilar", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026 - 5/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Gabriel", "concepto": "12 Sesiones / Mes + 4 Racks / Mes 4/2026 - 5/2026", "importe": 95, "forma": "TPV"}, {"nombre": "Ali", "concepto": "8 Sesiones / Mes 4/2026", "importe": 15, "forma": "TPV"}, {"nombre": "Maximiliano", "concepto": "4 Sesiones / Mes 4/2026 - 5/2026", "importe": 55, "forma": "TPV"}], "total": 2532.5}, {"id": 47, "num": "FV-0047", "fecha": "2026-05-04", "concepto": "Pagos del 04/05/2026", "lineas": [{"nombre": "Dante", "concepto": "Full 5/2026", "importe": 110, "forma": "Efectivo"}, {"nombre": "Julio", "concepto": "8 sesiones mix 05/2026", "importe": 85, "forma": "Efectivo"}, {"nombre": "Eduardo Heredero", "concepto": "Edu 05/2026", "importe": 50, "forma": "TPV"}], "total": 245}];
+
+if (socios.length === 0) {
+  socios = SOCIOS_INICIALES;
+  save();
+}
+const WELLHUB_INICIALES = [{"id": 1, "mes": 1, "anyo": 2026, "importe": 256.2, "estado": "pagado", "notas": ""}, {"id": 2, "mes": 2, "anyo": 2026, "importe": 738.65, "estado": "pagado", "notas": ""}, {"id": 3, "mes": 3, "anyo": 2026, "importe": 1000.45, "estado": "enviado", "notas": ""}, {"id": 4, "mes": 4, "anyo": 2026, "importe": 1240.75, "estado": "pendiente", "notas": ""}];
+if (wellhubData.length === 0) {
+  wellhubData = WELLHUB_INICIALES;
+  save();
+}
+if (facturasVenta.length === 0) {
+  facturasVenta = FACTURAS_INICIALES;
+  save();
+}
+
+// ===== MODAL =====
+function openModal(id) { document.getElementById(id).classList.add('open'); if (id === 'modal-nuevo-pago') abrirModalNuevoPago(); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// ===== DASHBOARD =====
+function renderDashboard() {
+  const activos = socios.filter(s => s.estado === 'activo' || s.estado === 'pausado').length;
+  const pausados = socios.filter(s => s.estado === 'pausado').length;
+  const bajas = socios.filter(s => s.estado === 'baja').length;
+  const tarifas = socios.filter(s => s.tipo === 'tarifa' && (s.estado === 'activo' || s.estado === 'pausado')).length;
+  const bonos = socios.filter(s => s.tipo === 'bono' && (s.estado === 'activo' || s.estado === 'pausado')).length;
+  const pendientes = socios.filter(s => (s.estado === 'activo' || s.estado === 'pausado') && (s.pago === 'pendiente' || s.pago === 'vencido')).length;
+  const epActivos = socios.filter(s => s.tipo === 'ep' && (s.estado === 'activo' || s.estado === 'pausado')).length;
+
+  document.getElementById('stat-activos').textContent = activos;
+  document.getElementById('stat-pausados').textContent = pausados;
+  document.getElementById('stat-bajas').textContent = bajas;
+  document.getElementById('stat-tarifa').textContent = tarifas;
+  document.getElementById('stat-bono').textContent = bonos;
+  document.getElementById('stat-pendiente').textContent = pendientes;
+  if(document.getElementById('stat-ep')) document.getElementById('stat-ep').textContent = epActivos;
+  buildDashMesSelector();
+
+  // Alertas
+  const alertasList = document.getElementById('alertas-list');
+  const pendList = socios.filter(s => s.estado === 'activo' && (s.pago === 'pendiente' || s.pago === 'vencido'));
+  if (pendList.length === 0) {
+    alertasList.innerHTML = `<div class="empty"><div class="empty-icon">✓</div><div class="empty-text">Sin alertas</div></div>`;
+  } else {
+    alertasList.innerHTML = pendList.map(s => `
+      <div class="alert-row">
+        <div>
+          <div class="name">${s.nombre} ${s.apellidos}</div>
+          <div class="detail">${s.tipo === 'tarifa' ? s.tarifa : s.bono}</div>
+        </div>
+        <span class="stat-badge badge-${s.pago === 'vencido' ? 'red' : 'yellow'}">${s.pago}</span>
+      </div>
+    `).join('');
+  }
+
+  // Últimas altas
+  const altas = document.getElementById('ultimas-altas');
+  const sorted = [...socios].sort((a, b) => new Date(b.alta) - new Date(a.alta)).slice(0, 5);
+  if (sorted.length === 0) {
+    altas.innerHTML = `<div class="empty"><div class="empty-icon">👥</div><div class="empty-text">Sin socios aún</div></div>`;
+  } else {
+    altas.innerHTML = sorted.map(s => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--gray-700)">
+        <div>
+          <div style="font-weight:600;font-size:13.5px">${s.nombre} ${s.apellidos}</div>
+          <div style="font-size:12px;color:var(--gray-400)">${formatDate(s.alta)}</div>
+        </div>
+        <span class="tipo-badge tipo-${s.tipo}">${s.tipo}</span>
+      </div>
+    `).join('');
+  }
+}
+
+// ===== SOCIOS =====
+
+function abrirModalSocio() {
+  socioEditando = null;
+  document.getElementById('modal-socio-title').textContent = 'Nuevo Socio';
+  document.getElementById('socio-id').value = '';
+  document.getElementById('s-nombre').value = '';
+  document.getElementById('s-apellidos').value = '';
+  document.getElementById('s-dni').value = '';
+  document.getElementById('s-tel').value = '';
+  document.getElementById('s-email').value = '';
+  document.getElementById('s-alta').value = new Date().toISOString().split('T')[0];
+  document.getElementById('s-baja').value = '';
+  document.getElementById('s-tipo').value = 'tarifa';
+  document.getElementById('s-actividades').value = '';
+  document.getElementById('s-pago').value = 'pagado';
+  document.getElementById('s-ult-pago').value = '';
+  toggleTipoFields();
+  openModal('modal-socio');
+}
+
+function editarSocio(id) {
+  const s = socios.find(x => x.id === id);
+  if (!s) return;
+  socioEditando = id;
+  document.getElementById('modal-socio-title').textContent = 'Editar Socio';
+  document.getElementById('socio-id').value = s.id;
+  document.getElementById('s-nombre').value = s.nombre;
+  document.getElementById('s-apellidos').value = s.apellidos;
+  document.getElementById('s-dni').value = s.dni;
+  document.getElementById('s-tel').value = s.tel;
+  document.getElementById('s-email').value = s.email;
+  document.getElementById('s-alta').value = s.alta;
+  document.getElementById('s-baja').value = s.baja || '';
+  document.getElementById('s-tipo').value = s.tipo;
+  document.getElementById('s-actividades').value = s.actividades;
+  document.getElementById('s-pago').value = s.pago;
+  document.getElementById('s-ult-pago').value = s.ultPago || '';
+  toggleTipoFields();
+  if (s.tipo === 'tarifa') {
+    document.getElementById('s-tarifa').value = s.tarifa;
+  } else {
+    document.getElementById('s-bono').value = s.bono;
+    document.getElementById('s-ses-total').value = s.sesTotales;
+    document.getElementById('s-ses-rest').value = s.sesRestantes;
+  }
+  openModal('modal-socio');
+}
+
+function toggleTipoFields() {
+  const tipo = document.getElementById('s-tipo').value;
+  document.getElementById('campo-tarifa').style.display = tipo === 'tarifa' ? '' : 'none';
+  document.getElementById('campo-bono').style.display = tipo === 'bono' ? '' : 'none';
+  document.getElementById('bono-sesiones-row').style.display = tipo === 'bono' ? '' : 'none';
+}
+
+function guardarSocio() {
+  const nombre = document.getElementById('s-nombre').value.trim();
+  const apellidos = document.getElementById('s-apellidos').value.trim();
+  if (!nombre) { alert('El nombre es obligatorio'); return; }
+
+  const tipo = document.getElementById('s-tipo').value;
+  const data = {
+    nombre, apellidos,
+    dni: document.getElementById('s-dni').value.trim(),
+    tel: document.getElementById('s-tel').value.trim(),
+    email: document.getElementById('s-email').value.trim(),
+    alta: document.getElementById('s-alta').value,
+    baja: document.getElementById('s-baja').value || null,
+    tipo,
+    tarifa: tipo === 'tarifa' ? document.getElementById('s-tarifa').value : null,
+    bono: tipo === 'bono' ? document.getElementById('s-bono').value : null,
+    sesTotales: tipo === 'bono' ? parseInt(document.getElementById('s-ses-total').value) : null,
+    sesRestantes: tipo === 'bono' ? parseInt(document.getElementById('s-ses-rest').value) : null,
+    actividades: document.getElementById('s-actividades').value.trim(),
+    pago: document.getElementById('s-pago').value,
+    ultPago: document.getElementById('s-ult-pago').value || null,
+    pagos: []
+  };
+
+  if (socioEditando !== null) {
+    const idx = socios.findIndex(x => x.id === socioEditando);
+    data.id = socioEditando;
+    data.pagos = socios[idx].pagos || [];
+    socios[idx] = data;
+  } else {
+    data.id = Date.now();
+    socios.push(data);
+  }
+
+  save();
+  closeModal('modal-socio');
+  renderSocios();
+}
+
+function eliminarSocio(id) {
+  if (!confirm('¿Eliminar este socio?')) return;
+  socios = socios.filter(s => s.id !== id);
+  save();
+  renderSocios();
+}
+
+// ===== PAGOS =====
+function verPagos(id) {
+  sociosPagosId = id;
+  const s = socios.find(x => x.id === id);
+  document.getElementById('modal-pagos-title').textContent = `Pagos — ${s.nombre} ${s.apellidos}`;
+  document.getElementById('np-fecha').value = new Date().toISOString().split('T')[0];
+  document.getElementById('np-importe').value = '';
+  document.getElementById('np-concepto').value = '';
+  renderPagosList(s);
+  openModal('modal-pagos');
+}
+
+function renderPagosList(s) {
+  const lista = document.getElementById('pagos-lista');
+  if (!s.pagos || s.pagos.length === 0) {
+    lista.innerHTML = `<p style="color:var(--gray-400);font-size:13px;text-align:center;padding:20px 0">Sin pagos registrados</p>`;
+    return;
+  }
+  lista.innerHTML = [...s.pagos].reverse().map(p => `
+    <div class="pago-row">
+      <div>
+        <div style="font-weight:600;font-size:13.5px">${p.concepto}</div>
+        <div class="pago-fecha">${formatDate(p.fecha)}</div>
+      </div>
+      <div class="pago-importe">${parseFloat(p.importe).toFixed(2)} €</div>
+    </div>
+  `).join('');
+}
+
+function registrarPago() {
+  const s = socios.find(x => x.id === sociosPagosId);
+  const fecha = document.getElementById('np-fecha').value;
+  const importe = document.getElementById('np-importe').value;
+  const concepto = document.getElementById('np-concepto').value.trim();
+  if (!fecha || !importe) { alert('Fecha e importe son obligatorios'); return; }
+  if (!s.pagos) s.pagos = [];
+  s.pagos.push({ fecha, importe, concepto: concepto || 'Pago' });
+  s.pago = 'pagado';
+  s.ultPago = fecha;
+  save();
+  renderPagosList(s);
+  renderSocios();
+}
+
+// ===== FACTURAS VENTA =====
+function tabFactura(tab, el) {
+  document.querySelectorAll('#page-fact-venta .section-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('lista-venta').style.display = tab === 'lista-venta' ? '' : 'none';
+  document.getElementById('importar-venta').style.display = tab === 'importar-venta' ? '' : 'none';
+}
+
+function renderFVenta() {
+  const el = document.getElementById('facturas-venta-list');
+  const WELLHUB_INICIALES = [{"id": 1, "mes": 1, "anyo": 2026, "importe": 256.2, "estado": "pagado", "notas": ""}, {"id": 2, "mes": 2, "anyo": 2026, "importe": 738.65, "estado": "pagado", "notas": ""}, {"id": 3, "mes": 3, "anyo": 2026, "importe": 1000.45, "estado": "enviado", "notas": ""}, {"id": 4, "mes": 4, "anyo": 2026, "importe": 1240.75, "estado": "pendiente", "notas": ""}];
+if (wellhubData.length === 0) {
+  wellhubData = WELLHUB_INICIALES;
+  save();
+}
+if (facturasVenta.length === 0) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">📄</div><div class="empty-text">No hay facturas de venta</div></div>`;
+    return;
+  }
+  el.innerHTML = facturasVenta.map(f => `
+    <div class="invoice-card">
+      <div>
+        <div class="invoice-num">${f.num}</div>
+        <div class="invoice-meta">${formatDate(f.fecha)} · ${f.concepto}</div>
+        <div style="margin-top:6px">${f.lineas ? f.lineas.map(l => `<div style="font-size:12px;color:var(--gray-400)">— ${l.desc}: <strong>${parseFloat(l.imp).toFixed(2)}€</strong></div>`).join('') : ''}</div>
+      </div>
+      <div>
+        <div class="invoice-amount">${parseFloat(f.total).toFixed(2)} €<small>VENTA</small></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function procesarPagos() {
+  const raw = document.getElementById('pagos-input').value.trim();
+  const prefijo = document.getElementById('prefijo-factura').value.trim() || 'FV';
+  let numInicial = parseInt(document.getElementById('num-factura').value) || 1;
+
+  if (!raw) { alert('Introduce pagos para procesar'); return; }
+
+  const lineas = raw.split('\n').map(l => l.trim()).filter(l => l);
+  const grupos = {};
+
+  lineas.forEach(l => {
+    const partes = l.split('|').map(p => p.trim());
+    if (partes.length < 2) return;
+    const fecha = partes[0];
+    const importe = parseFloat(partes[1]) || 0;
+    const desc = partes[2] || 'Pago';
+    if (!grupos[fecha]) grupos[fecha] = [];
+    grupos[fecha].push({ desc, imp: importe });
+  });
+
+  const nuevasFacturas = Object.keys(grupos).sort().map((fecha, i) => {
+    const lineas = grupos[fecha];
+    const total = lineas.reduce((s, l) => s + l.imp, 0);
+    return {
+      id: Date.now() + i,
+      num: `${prefijo}-${String(numInicial + i).padStart(4, '0')}`,
+      fecha,
+      concepto: `Pagos del ${formatDate(fecha)}`,
+      lineas,
+      total
+    };
+  });
+
+  // Preview
+  const prev = document.getElementById('preview-facturas');
+  prev.innerHTML = `
+    <div class="section-title">${nuevasFacturas.length} factura(s) generada(s)</div>
+    ${nuevasFacturas.map(f => `
+      <div class="invoice-card">
+        <div>
+          <div class="invoice-num">${f.num}</div>
+          <div class="invoice-meta">${formatDate(f.fecha)}</div>
+          <div style="margin-top:6px">${f.lineas.map(l => `<div style="font-size:12px;color:var(--gray-400)">— ${l.desc}: <strong>${l.imp.toFixed(2)}€</strong></div>`).join('')}</div>
+        </div>
+        <div class="invoice-amount">${f.total.toFixed(2)} €<small>TOTAL DÍA</small></div>
+      </div>
+    `).join('')}
+    <button class="btn btn-primary" style="margin-top:12px" onclick="confirmarFacturas(${JSON.stringify(nuevasFacturas).replace(/"/g, '&quot;')})">CONFIRMAR Y GUARDAR</button>
+  `;
+}
+
+function confirmarFacturas(facs) {
+  facturasVenta = [...facturasVenta, ...facs];
+  save();
+  renderFVenta();
+  // Switch tab
+  document.querySelectorAll('#page-fact-venta .tab-btn')[0].click();
+  alert('Facturas guardadas correctamente');
+}
+
+// ===== FACTURAS COMPRA =====
+function calcFC() {
+  const base = parseFloat(document.getElementById('fc-base').value) || 0;
+  const iva = parseFloat(document.getElementById('fc-iva').value) || 0;
+  const total = base * (1 + iva / 100);
+  document.getElementById('fc-total').value = total.toFixed(2) + ' €';
+}
+
+function guardarFCompra() {
+  const num = document.getElementById('fc-num').value.trim();
+  const fecha = document.getElementById('fc-fecha').value;
+  const proveedor = document.getElementById('fc-proveedor').value.trim();
+  const base = parseFloat(document.getElementById('fc-base').value) || 0;
+  const iva = parseFloat(document.getElementById('fc-iva').value) || 0;
+  const total = base * (1 + iva / 100);
+  const concepto = document.getElementById('fc-concepto').value.trim();
+  const estado = document.getElementById('fc-estado').value;
+
+  if (!num || !fecha) { alert('Número y fecha son obligatorios'); return; }
+
+  facturasCompra.push({ id: Date.now(), num, fecha, proveedor, base, iva, total, concepto, estado });
+  save();
+  closeModal('modal-fcompra');
+  renderFCompra();
+}
+
+function renderFCompra() {
+  const el = document.getElementById('facturas-compra-list');
+  if (facturasCompra.length === 0) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">🛒</div><div class="empty-text">No hay facturas de compra</div></div>`;
+    return;
+  }
+  el.innerHTML = facturasCompra.map(f => `
+    <div class="invoice-card">
+      <div>
+        <div class="invoice-num">${f.num}</div>
+        <div class="invoice-meta">${formatDate(f.fecha)} · ${f.proveedor || 'Sin proveedor'}</div>
+        <div style="margin-top:4px;font-size:12px;color:var(--gray-400)">${f.concepto || ''}</div>
+        <div style="margin-top:6px"><span class="stat-badge badge-${f.estado === 'pagada' ? 'green' : 'yellow'}">${f.estado}</span></div>
+      </div>
+      <div>
+        <div class="invoice-amount">${parseFloat(f.total).toFixed(2)} €<small>IVA ${f.iva}% incl.</small></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ===== UTILS =====
+function formatDate(d) {
+  if (!d) return '—';
+  const [y, m, day] = d.split('-');
+  return `${day}/${m}/${y}`;
+}
+
+
+
+
+
+function setSociosOrden(orden) {
+  sociosOrden = orden;
+  // Update button styles
+  const btnNombre = document.getElementById('btn-ord-nombre');
+  const btnAlta = document.getElementById('btn-ord-alta');
+  if (btnNombre) {
+    btnNombre.style.borderColor = orden === 'nombre' ? 'var(--red)' : 'var(--gray-600)';
+    btnNombre.style.color = orden === 'nombre' ? 'var(--white)' : 'var(--gray-300)';
+  }
+  if (btnAlta) {
+    btnAlta.style.borderColor = orden === 'alta' ? 'var(--red)' : 'var(--gray-600)';
+    btnAlta.style.color = orden === 'alta' ? 'var(--white)' : 'var(--gray-300)';
+  }
+  const icon = document.getElementById('sort-icon');
+  if (icon) icon.textContent = orden === 'alta' ? '↑' : '↕';
+  renderSocios();
+}
+
+function exportarSociosExcel() {
+  const rows = socios.map(s => ({
+    'ID': 'ID-' + String(s.id).padStart(4, '0'),
+    'Nombre': s.nombre,
+    'Apellidos': s.apellidos,
+    'DNI': s.dni || '',
+    'Teléfono': s.tel || '',
+    'Email': s.email || '',
+    'Fecha Alta': s.alta ? formatDate(s.alta) : '',
+    'Fecha Baja': s.baja ? formatDate(s.baja) : '',
+    'Tipo': s.tipo.toUpperCase(),
+    'Tarifa / Bono': s.tipo === 'tarifa' ? (s.tarifa || '').replace(/\s*\d{1,2}\/\d{4}(\s*-\s*\d{1,2}\/\d{4})?/g,'').trim() : s.tipo === 'ep' ? 'EP - Bono ' + s.sesTotales + ' ses.' : (s.bono || ''),
+    'Precio Bono (€)': s.precioBono || '',
+    'Sesiones Totales': s.sesTotales || '',
+    'Sesiones Restantes': s.sesRestantes || '',
+    'Estado': s.estado,
+    'Estado Pago': s.pago,
+    'Total Pagado (€)': (s.pagos || []).reduce((sum, p) => sum + parseFloat(p.importe || 0), 0).toFixed(2),
+    'Formas de Pago': [...new Set((s.pagos || []).map(p => p.forma).filter(Boolean))].join(', '),
+    'Último Pago': s.ultPago ? formatDate(s.ultPago) : '',
+    'Actividades': s.actividades || '',
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+
+  // Column widths
+  ws['!cols'] = [
+    {wch:8},{wch:14},{wch:18},{wch:12},{wch:14},{wch:28},{wch:12},{wch:12},
+    {wch:8},{wch:32},{wch:14},{wch:16},{wch:18},{wch:10},{wch:10},
+    {wch:16},{wch:18},{wch:12},{wch:20}
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Socios');
+
+  const fecha = new Date().toISOString().split('T')[0];
+  XLSX.writeFile(wb, `Codek_Socios_${fecha}.xlsx`);
+}
+
+
+// ===== NUEVO PAGO MANUAL =====
+function abrirModalNuevoPago() {
+  // Populate socio select
+  const sel = document.getElementById('np-manual-socio');
+  sel.innerHTML = '<option value="">— Seleccionar socio —</option>';
+  [...socios]
+    .sort((a,b) => (a.nombre+' '+a.apellidos).localeCompare(b.nombre+' '+b.apellidos, 'es'))
+    .forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.nombre + (s.apellidos ? ' ' + s.apellidos : '');
+      sel.appendChild(opt);
+    });
+  document.getElementById('np-manual-fecha').value = new Date().toISOString().split('T')[0];
+  document.getElementById('np-manual-importe').value = '';
+  document.getElementById('np-manual-concepto').value = '';
+  document.getElementById('np-manual-forma').value = 'Efectivo';
+}
+
+function guardarPagoManual() {
+  const socioId = parseInt(document.getElementById('np-manual-socio').value);
+  const fecha = document.getElementById('np-manual-fecha').value;
+  const importe = parseFloat(document.getElementById('np-manual-importe').value);
+  const concepto = document.getElementById('np-manual-concepto').value.trim();
+  const forma = document.getElementById('np-manual-forma').value;
+
+  if (!socioId) { alert('Selecciona un socio'); return; }
+  if (!fecha) { alert('Selecciona una fecha'); return; }
+  if (!importe || importe <= 0) { alert('Introduce un importe válido'); return; }
+  if (!concepto) { alert('Introduce un concepto'); return; }
+
+  const s = socios.find(x => x.id === socioId);
+  if (!s.pagos) s.pagos = [];
+  s.pagos.push({ fecha, concepto, importe, forma, id: Date.now() });
+  s.ultPago = fecha;
+  if (s.pago !== 'pagado') s.pago = 'pagado';
+  save();
+  closeModal('modal-nuevo-pago');
+  renderPagosTabla();
+  alert(`Pago de ${importe.toFixed(2)}€ registrado para ${s.nombre}`);
+}
+
+
+// ===== WELLHUB =====
+// MESES already declared
+const _MESES_UNUSED = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+function renderWellhub() {
+  const tbody = document.getElementById('wellhub-tbody');
+  const sorted = [...wellhubData].sort((a,b) => b.anyo !== a.anyo ? b.anyo - a.anyo : b.mes - a.mes);
+
+  if (sorted.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">Sin datos</td></tr>`;
+  } else {
+    tbody.innerHTML = sorted.map(w => {
+      const estadoBadge = w.estado === 'pagado'
+        ? `<span class="stat-badge badge-green">Pagado</span>`
+        : w.estado === 'enviado'
+        ? `<span class="stat-badge badge-blue">Enviado al banco</span>`
+        : `<span class="stat-badge badge-yellow">Pendiente</span>`;
+      return `<tr>
+        <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${MESES[w.mes]} ${w.anyo}</td>
+        <td style="font-family:var(--font-display);font-size:18px;font-weight:800">${parseFloat(w.importe).toFixed(2)} €</td>
+        <td>${estadoBadge}</td>
+        <td style="font-size:13px;color:var(--gray-400)">${w.notas || '—'}</td>
+        <td>
+          <div style="display:flex;gap:6px">
+            <button class="action-btn" onclick="editarWellhub(${w.id})">Editar</button>
+            <button class="action-btn" onclick="eliminarWellhub(${w.id})" style="color:var(--red)">×</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  const total = wellhubData.reduce((s,w) => s + parseFloat(w.importe), 0);
+  const media = wellhubData.length ? total / wellhubData.length : 0;
+  const mejor = wellhubData.length ? wellhubData.reduce((a,b) => parseFloat(a.importe) > parseFloat(b.importe) ? a : b) : null;
+
+  if (document.getElementById('wh-total')) {
+    document.getElementById('wh-total').textContent = total.toFixed(2) + ' €';
+    document.getElementById('wh-media').textContent = media.toFixed(2) + ' €';
+    document.getElementById('wh-meses').textContent = wellhubData.length;
+    document.getElementById('wh-total-footer').textContent = total.toFixed(2) + ' €';
+    if (mejor) {
+      document.getElementById('wh-mejor').textContent = parseFloat(mejor.importe).toFixed(2) + ' €';
+      document.getElementById('wh-mejor-mes').textContent = MESES[mejor.mes] + ' ' + mejor.anyo;
+    }
+  }
+}
+
+function guardarWellhub() {
+  const mes = parseInt(document.getElementById('wh-mes').value);
+  const anyo = parseInt(document.getElementById('wh-anyo').value);
+  const importe = parseFloat(document.getElementById('wh-importe').value);
+  const estado = document.getElementById('wh-estado').value;
+  const notas = document.getElementById('wh-notas').value.trim();
+  const editId = document.getElementById('wh-edit-id').value;
+
+  if (!mes || !anyo || !importe) { alert('Rellena mes, año e importe'); return; }
+
+  if (editId) {
+    const idx = wellhubData.findIndex(w => w.id === parseInt(editId));
+    if (idx > -1) wellhubData[idx] = { id: parseInt(editId), mes, anyo, importe, estado, notas };
+  } else {
+    wellhubData.push({ id: Date.now(), mes, anyo, importe, estado, notas });
+  }
+  save();
+  closeModal('modal-wellhub-nueva');
+  renderWellhub();
+}
+
+function editarWellhub(id) {
+  const w = wellhubData.find(x => x.id === id);
+  if (!w) return;
+  document.getElementById('modal-wh-title').textContent = 'Editar Factura Wellhub';
+  document.getElementById('wh-edit-id').value = w.id;
+  document.getElementById('wh-mes').value = w.mes;
+  document.getElementById('wh-anyo').value = w.anyo;
+  document.getElementById('wh-importe').value = w.importe;
+  document.getElementById('wh-estado').value = w.estado;
+  document.getElementById('wh-notas').value = w.notas || '';
+  openModal('modal-wellhub-nueva');
+}
+
+function eliminarWellhub(id) {
+  if (!confirm('¿Eliminar esta factura?')) return;
+  wellhubData = wellhubData.filter(w => w.id !== id);
+  save();
+  renderWellhub();
+}
+
+
+
+
+function irAWellhub() {
+  const navEl = document.querySelector('.nav-item[onclick*="wellhub"]');
+  navTo('wellhub', navEl);
+  window.scrollTo(0,0);
+}
+
+// filtro: 'tarifa'|'bono'|'ep'|'todos'   mes: 'YYYY-MM'|'todos'
+function irAPagosFiltrado(tipo, mes) {
+  // Navigate to pagos
+  const navEl = document.querySelector('.nav-item[onclick*=\'pagos\']');
+  navTo('pagos', navEl);
+
+  // Override getAllPagos with a filtered version for this view
+  window._pagosTipoFiltro = tipo;   // 'tarifa'|'bono'|'ep'|'todos'
+  window._pagosMesFiltro = mes;     // 'YYYY-MM'|'todos'
+
+  renderPagosTablaFiltrada();
+  window.scrollTo(0,0);
+}
+
+function renderPagosTablaFiltrada() {
+  const tipo = window._pagosTipoFiltro || 'todos';
+  const mes  = window._pagosMesFiltro  || 'todos';
+
+  let pagos = [];
+  socios.forEach(s => {
+    (s.pagos || []).forEach(p => {
+      // Filter by mes
+      if (mes !== 'todos' && (!p.fecha || !p.fecha.startsWith(mes))) return;
+      // Filter by tipo
+      if (tipo !== 'todos' && s.tipo !== tipo) return;
+      pagos.push({...p, socioNombre: s.nombre + ' ' + s.apellidos, socioId: s.id, socioTipo: s.tipo});
+    });
+  });
+  pagos.sort((a,b) => b.fecha.localeCompare(a.fecha));
+
+  // Update table header to show active filter
+  const title = document.querySelector('#page-pagos .table-header-title');
+  if (title) {
+    const tipoLabel = tipo === 'todos' ? 'Todos' : tipo === 'ep' ? 'Entreno Personal' : tipo.charAt(0).toUpperCase() + tipo.slice(1);
+    const mesLabel  = mes === 'todos' ? 'Todos los meses' : (() => { const [y,m] = mes.split('-'); return MESES[parseInt(m)] + ' ' + y; })();
+    title.innerHTML = `Registro de Pagos <span style="color:var(--red);font-size:12px;letter-spacing:1px"> · ${tipoLabel} · ${mesLabel}</span>
+      <button onclick="limpiarFiltroPagos()" style="margin-left:12px;background:transparent;border:1px solid var(--gray-600);color:var(--gray-400);font-size:10px;padding:2px 8px;cursor:pointer;font-family:var(--font-display);letter-spacing:1px">✕ LIMPIAR</button>`;
+  }
+
+  const tbody = document.getElementById('pagos-tbody');
+  if (pagos.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">Sin pagos para este filtro</td></tr>`;
+  } else {
+    tbody.innerHTML = pagos.map(p => {
+      const formaColor = p.forma === 'TPV' ? 'badge-green' : p.forma === 'Efectivo' ? 'badge-yellow' : p.forma === 'Transferencia' ? 'badge-blue' : 'badge-gray';
+      const tipoColor = p.socioTipo === 'ep' ? '#c084fc' : p.socioTipo === 'bono' ? '#74b3e8' : 'var(--gray-300)';
+      return `<tr>
+        <td style="font-family:var(--font-display);letter-spacing:1px">${formatDate(p.fecha)}</td>
+        <td style="font-weight:600">${p.socioNombre} <span style="font-size:11px;color:${tipoColor}">${p.socioTipo.toUpperCase()}</span></td>
+        <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
+        <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
+        <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Totals
+  const gran_total = pagos.reduce((s,p) => s + parseFloat(p.importe||0), 0);
+  const totales = {};
+  pagos.forEach(p => { totales[p.forma] = (totales[p.forma]||0) + parseFloat(p.importe||0); });
+  const formaColors = {TPV:'#52b788', Efectivo:'#e9c46a', Transferencia:'#74b3e8', Tarjeta:'#c084fc'};
+  document.getElementById('pagos-totales').innerHTML =
+    Object.entries(totales).map(([f,t]) =>
+      `<span style="font-family:var(--font-display);font-size:13px;color:${formaColors[f]||'#aaa'}">${f}: <strong>${t.toFixed(2)} €</strong></span>`
+    ).join('') +
+    `<span style="font-family:var(--font-display);font-size:14px;color:var(--white);margin-left:auto"><strong>TOTAL: ${gran_total.toFixed(2)} €</strong></span>`;
+}
+
+function limpiarFiltroPagos() {
+  window._pagosTipoFiltro = 'todos';
+  window._pagosMesFiltro = 'todos';
+  const title = document.querySelector('#page-pagos .table-header-title');
+  if (title) title.textContent = 'Registro de Pagos';
+  renderPagosTabla();
+}
+
+
+function irASociosFiltro(filtro) {
+  const navEl = document.querySelector('.nav-item[onclick*=\'socios\']');
+  navTo('socios', navEl);
+
+  // Clear all filters
+  filtrosFiltroActual.clear();
+  document.querySelectorAll('#socios-filter-pills .pill').forEach(p => p.classList.remove('active'));
+  busqueda = '';
+  const searchEl = document.querySelector('#page-socios .search-box');
+  if (searchEl) searchEl.value = '';
+
+  window._pendienteFiltro = false;
+  if (filtro === 'pendiente') {
+    window._pendienteFiltro = true;
+  } else if (filtro === 'activo') {
+    // Activos includes pausados - activate both pills
+    filtrosFiltroActual.add('activo');
+    filtrosFiltroActual.add('pausado');
+    document.querySelectorAll('#socios-filter-pills .pill').forEach(p => {
+      if (p.dataset.filter === 'activo' || p.dataset.filter === 'pausado') p.classList.add('active');
+    });
+  } else {
+    filtrosFiltroActual.add(filtro);
+    const pill = [...document.querySelectorAll('#socios-filter-pills .pill')].find(p => p.dataset.filter === filtro);
+    if (pill) pill.classList.add('active');
+  }
+
+  renderSocios();
+  window.scrollTo(0,0);
+}
+
+
+// ===== IMPORTAR EXCEL PAGOS =====
+function importarExcelPagos(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = ''; // reset so same file can be re-imported
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'binary', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { raw: false, dateNF: 'yyyy-mm-dd' });
+
+      // Build existing payment fingerprints to avoid duplicates
+      // fingerprint = fecha|socioNombre(lower)|importe
+      const existingKeys = new Set();
+      socios.forEach(s => {
+        (s.pagos || []).forEach(p => {
+          const key = `${p.fecha}|${(s.nombre + ' ' + s.apellidos).toLowerCase().trim()}|${parseFloat(p.importe).toFixed(2)}`;
+          existingKeys.add(key);
+        });
+      });
+
+      // Expected columns (flexible matching):
+      // Date/Fecha, Name/Nombre/Cliente/Socio, Amount/Importe/Cantidad, Concept/Concepto, Payment/Forma
+      let added = 0, skipped = 0, unmatched = [];
+
+      rows.forEach(row => {
+        // Detect column names flexibly
+        const keys = Object.keys(row);
+        const getCol = (...names) => {
+          for (const n of names) {
+            const k = keys.find(k => k.toLowerCase().includes(n.toLowerCase()));
+            if (k && row[k] !== undefined && row[k] !== '') return String(row[k]).trim();
+          }
+          return '';
+        };
+
+        // Parse date - could be serial number or string
+        let fechaRaw = getCol('fecha', 'date', 'día', 'dia', 'f.');
+        let fecha = '';
+        if (fechaRaw) {
+          // Try to parse as date string or serial
+          if (/^\d{5}$/.test(fechaRaw)) {
+            // Excel serial
+            const d = new Date(Date.UTC(1899, 11, 30) + parseInt(fechaRaw) * 86400000);
+            fecha = d.toISOString().split('T')[0];
+          } else if (/^\d{4}-\d{2}-\d{2}/.test(fechaRaw)) {
+            fecha = fechaRaw.substring(0, 10);
+          } else if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/.test(fechaRaw)) {
+            const parts = fechaRaw.split(/[\/\-]/);
+            fecha = parts[2] + '-' + parts[1].padStart(2,'0') + '-' + parts[0].padStart(2,'0');
+          } else {
+            fecha = fechaRaw.substring(0, 10);
+          }
+        }
+
+        if (!fecha) { skipped++; return; }
+
+        const nombreRaw = getCol('nombre', 'name', 'cliente', 'socio', 'etiqueta');
+        const importeRaw = getCol('importe', 'amount', 'cantidad', 'total', 'precio');
+        const concepto = getCol('concepto', 'concept', 'descripcion', 'descripción', 'tarifa', 'servicio') || nombreRaw;
+        const forma = getCol('forma', 'payment', 'pago', 'metodo', 'método') || 'TPV';
+        const importe = parseFloat((importeRaw || '0').replace(',', '.')) || 0;
+
+        if (!nombreRaw || importe === 0) { skipped++; return; }
+
+        // Match socio by name (fuzzy)
+        const nombreLower = nombreRaw.toLowerCase().trim();
+        let socio = socios.find(s => {
+          const sNombre = (s.nombre + ' ' + s.apellidos).toLowerCase().trim();
+          const sNombre2 = (s.apellidos + ' ' + s.nombre).toLowerCase().trim();
+          return sNombre === nombreLower || sNombre2 === nombreLower ||
+                 sNombre.includes(nombreLower) || nombreLower.includes(s.nombre.toLowerCase());
+        });
+
+        if (!socio) {
+          unmatched.push(nombreRaw);
+          skipped++;
+          return;
+        }
+
+        // Check duplicate
+        const key = `${fecha}|${(socio.nombre + ' ' + socio.apellidos).toLowerCase().trim()}|${importe.toFixed(2)}`;
+        if (existingKeys.has(key)) { skipped++; return; }
+
+        // Add payment
+        if (!socio.pagos) socio.pagos = [];
+        socio.pagos.push({ fecha, concepto, importe, forma, id: Date.now() + Math.random() });
+        socio.ultPago = socio.ultPago && socio.ultPago > fecha ? socio.ultPago : fecha;
+        existingKeys.add(key);
+        added++;
+      });
+
+      save();
+      renderPagosTabla();
+
+      let msg = `✓ ${added} pago(s) importado(s) correctamente.\n${skipped} omitido(s) (ya existían o sin datos).`;
+      if (unmatched.length > 0) {
+        const uniqueUnmatched = [...new Set(unmatched)];
+        msg += `\n\nSocios no encontrados (${uniqueUnmatched.length}):\n${uniqueUnmatched.join('\n')}`;
+      }
+      alert(msg);
+
+    } catch(err) {
+      alert('Error al leer el Excel: ' + err.message);
+    }
+  };
+  reader.readAsBinaryString(file);
+}
+
+// ===== RESET =====
+function resetearDatos() {
+  if (!confirm('¿Seguro que quieres resetear todos los datos? Se perderán los cambios y se cargarán los socios iniciales.')) return;
+  localStorage.removeItem('ck_socios');
+  localStorage.removeItem('ck_fventa');
+  localStorage.removeItem('ck_fcompra');
+  localStorage.removeItem('ck_wellhub');
+  location.reload();
+}
+
+// ===== INIT =====
+
+
+// Load fresh data from Supabase on top of localStorage
+loadFromSupabase();
 </script>
 
 <!-- ====== MODAL SESIONES EP ====== -->
