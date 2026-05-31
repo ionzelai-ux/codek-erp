@@ -752,6 +752,7 @@
         <button class="pill" data-filter="baja" onclick="toggleFiltroSocio(this)">Baja</button>
         <button class="pill" data-filter="pausado" onclick="toggleFiltroSocio(this)">Pausados</button>
         <button class="pill" data-filter="ep" onclick="toggleFiltroSocio(this)">Entreno Personal</button>
+        <button class="pill" data-filter="efectivo" onclick="toggleFiltroSocio(this)">Efectivo</button>
       </div>
 
       <div class="table-wrapper">
@@ -1373,6 +1374,7 @@ function renderSocios() {
   const tipoFiltros = new Set(['tarifa','bono','ep']);
   const activeEstado = [...filtrosFiltroActual].filter(f => estadoFiltros.has(f));
   const activeTipo   = [...filtrosFiltroActual].filter(f => tipoFiltros.has(f));
+  const activeEfectivo = filtrosFiltroActual.has('efectivo');
 
   let lista = listaBase.filter(s => {
     if (filtrosFiltroActual.size === 0) return true;
@@ -1391,6 +1393,8 @@ function renderSocios() {
       const matchTipo = activeTipo.some(f => s.tipo === f);
       if (!matchTipo) return false;
     }
+    // Efectivo filter
+    if (activeEfectivo && !(s.pagos||[]).some(p => p.forma === 'Efectivo')) return false;
     return true;
   });
 
