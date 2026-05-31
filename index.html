@@ -1306,13 +1306,13 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 
 // ===== DASHBOARD =====
 function renderDashboard() {
-  const activos = socios.filter(s => s.estado === 'activo' || s.estado === 'pausado').length;
+  const activos = socios.filter(s => s.estado === 'activo').length;
   const pausados = socios.filter(s => s.estado === 'pausado').length;
   const bajas = socios.filter(s => s.estado === 'baja').length;
-  const tarifas = socios.filter(s => s.tipo === 'tarifa' && (s.estado === 'activo' || s.estado === 'pausado')).length;
-  const bonos = socios.filter(s => s.tipo === 'bono' && (s.estado === 'activo' || s.estado === 'pausado')).length;
-  const pendientes = socios.filter(s => (s.estado === 'activo' || s.estado === 'pausado') && (s.pago === 'pendiente' || s.pago === 'vencido')).length;
-  const epActivos = socios.filter(s => s.tipo === 'ep' && (s.estado === 'activo' || s.estado === 'pausado')).length;
+  const tarifas = socios.filter(s => s.tipo === 'tarifa' && s.estado === 'activo').length;
+  const bonos = socios.filter(s => s.tipo === 'bono' && s.estado === 'activo').length;
+  const pendientes = socios.filter(s => s.estado === 'activo' && (s.pago === 'pendiente' || s.pago === 'vencido')).length;
+  const epActivos = socios.filter(s => s.tipo === 'ep' && s.estado === 'activo').length;
 
   document.getElementById('stat-activos').textContent = activos;
   document.getElementById('stat-pausados').textContent = pausados;
@@ -1381,7 +1381,7 @@ function renderSocios() {
     // Estado: match ANY of the selected estado filters
     if (activeEstado.length > 0) {
       const matchEstado = activeEstado.some(f => {
-        if (f === 'activo') return s.estado === 'activo' || s.estado === 'pausado';
+        if (f === 'activo') return s.estado === 'activo';
         if (f === 'pausado') return s.estado === 'pausado';
         if (f === 'baja') return s.estado === 'baja';
         return false;
@@ -2320,12 +2320,9 @@ function irASociosFiltro(filtro) {
   if (filtro === 'pendiente') {
     window._pendienteFiltro = true;
   } else if (filtro === 'activo') {
-    // Activos includes pausados - activate both pills
     filtrosFiltroActual.add('activo');
-    filtrosFiltroActual.add('pausado');
-    document.querySelectorAll('#socios-filter-pills .pill').forEach(p => {
-      if (p.dataset.filter === 'activo' || p.dataset.filter === 'pausado') p.classList.add('active');
-    });
+    const pill = [...document.querySelectorAll('#socios-filter-pills .pill')].find(p => p.dataset.filter === 'activo');
+    if (pill) pill.classList.add('active');
   } else {
     filtrosFiltroActual.add(filtro);
     const pill = [...document.querySelectorAll('#socios-filter-pills .pill')].find(p => p.dataset.filter === filtro);
@@ -2482,13 +2479,13 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 
 // ===== DASHBOARD =====
 function renderDashboard() {
-  const activos = socios.filter(s => s.estado === 'activo' || s.estado === 'pausado').length;
+  const activos = socios.filter(s => s.estado === 'activo').length;
   const pausados = socios.filter(s => s.estado === 'pausado').length;
   const bajas = socios.filter(s => s.estado === 'baja').length;
-  const tarifas = socios.filter(s => s.tipo === 'tarifa' && (s.estado === 'activo' || s.estado === 'pausado')).length;
-  const bonos = socios.filter(s => s.tipo === 'bono' && (s.estado === 'activo' || s.estado === 'pausado')).length;
-  const pendientes = socios.filter(s => (s.estado === 'activo' || s.estado === 'pausado') && (s.pago === 'pendiente' || s.pago === 'vencido')).length;
-  const epActivos = socios.filter(s => s.tipo === 'ep' && (s.estado === 'activo' || s.estado === 'pausado')).length;
+  const tarifas = socios.filter(s => s.tipo === 'tarifa' && s.estado === 'activo').length;
+  const bonos = socios.filter(s => s.tipo === 'bono' && s.estado === 'activo').length;
+  const pendientes = socios.filter(s => s.estado === 'activo' && (s.pago === 'pendiente' || s.pago === 'vencido')).length;
+  const epActivos = socios.filter(s => s.tipo === 'ep' && s.estado === 'activo').length;
 
   document.getElementById('stat-activos').textContent = activos;
   document.getElementById('stat-pausados').textContent = pausados;
@@ -3141,12 +3138,9 @@ function irASociosFiltro(filtro) {
   if (filtro === 'pendiente') {
     window._pendienteFiltro = true;
   } else if (filtro === 'activo') {
-    // Activos includes pausados - activate both pills
     filtrosFiltroActual.add('activo');
-    filtrosFiltroActual.add('pausado');
-    document.querySelectorAll('#socios-filter-pills .pill').forEach(p => {
-      if (p.dataset.filter === 'activo' || p.dataset.filter === 'pausado') p.classList.add('active');
-    });
+    const pill = [...document.querySelectorAll('#socios-filter-pills .pill')].find(p => p.dataset.filter === 'activo');
+    if (pill) pill.classList.add('active');
   } else {
     filtrosFiltroActual.add(filtro);
     const pill = [...document.querySelectorAll('#socios-filter-pills .pill')].find(p => p.dataset.filter === filtro);
