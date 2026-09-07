@@ -983,6 +983,7 @@
           <select class="form-select" id="s-tipo" onchange="toggleTipoFields()">
             <option value="tarifa">Tarifa (cuota mensual)</option>
             <option value="bono">Bono (sesiones prepagadas)</option>
+            <option value="ep">Entreno personal</option>
           </select>
         </div>
         <div class="form-group" id="campo-tarifa">
@@ -1004,6 +1005,10 @@
             <option value="Bono 10 — 170€">Bono 10 — 170€</option>
           </select>
         </div>
+        <div class="form-group" id="campo-ep" style="display:none">
+          <label class="form-label">Descripción EP</label>
+          <input class="form-input" id="s-ep-desc" type="text" placeholder="Ej: 8 sesiones Entreno Personal" />
+        </div>
       </div>
       <div id="bono-sesiones-row" style="display:none" class="form-row">
         <div class="form-group">
@@ -1013,6 +1018,10 @@
         <div class="form-group">
           <label class="form-label">Sesiones Restantes</label>
           <input class="form-input" id="s-ses-rest" type="number" value="10" min="0" />
+        </div>
+        <div class="form-group" id="campo-precio-bono" style="display:none">
+          <label class="form-label">Precio pack (€)</label>
+          <input class="form-input" id="s-precio-bono" type="number" step="0.01" placeholder="0.00" />
         </div>
       </div>
       <div class="form-row full">
@@ -1535,6 +1544,10 @@ function abrirModalSocio() {
   document.getElementById('s-actividades').value = '';
   document.getElementById('s-pago').value = 'pagado';
   document.getElementById('s-ult-pago').value = '';
+  const epd = document.getElementById('s-ep-desc'); if (epd) epd.value = '';
+  const pb = document.getElementById('s-precio-bono'); if (pb) pb.value = '';
+  document.getElementById('s-ses-total').value = 10;
+  document.getElementById('s-ses-rest').value = 10;
   toggleTipoFields();
   openModal('modal-socio');
 }
@@ -1559,10 +1572,15 @@ function editarSocio(id) {
   toggleTipoFields();
   if (s.tipo === 'tarifa') {
     document.getElementById('s-tarifa').value = s.tarifa;
-  } else {
+  } else if (s.tipo === 'bono') {
     document.getElementById('s-bono').value = s.bono;
-    document.getElementById('s-ses-total').value = s.sesTotales;
-    document.getElementById('s-ses-rest').value = s.sesRestantes;
+    document.getElementById('s-ses-total').value = s.sesTotales || 10;
+    document.getElementById('s-ses-rest').value = s.sesRestantes || 0;
+  } else if (s.tipo === 'ep') {
+    const epd = document.getElementById('s-ep-desc'); if (epd) epd.value = s.bono || '';
+    document.getElementById('s-ses-total').value = s.sesTotales || 8;
+    document.getElementById('s-ses-rest').value = s.sesRestantes || 0;
+    const pb = document.getElementById('s-precio-bono'); if (pb) pb.value = s.precioBono || '';
   }
   openModal('modal-socio');
 }
@@ -1571,7 +1589,12 @@ function toggleTipoFields() {
   const tipo = document.getElementById('s-tipo').value;
   document.getElementById('campo-tarifa').style.display = tipo === 'tarifa' ? '' : 'none';
   document.getElementById('campo-bono').style.display = tipo === 'bono' ? '' : 'none';
-  document.getElementById('bono-sesiones-row').style.display = tipo === 'bono' ? '' : 'none';
+  const epCampo = document.getElementById('campo-ep');
+  if (epCampo) epCampo.style.display = tipo === 'ep' ? '' : 'none';
+  const rowSes = document.getElementById('bono-sesiones-row');
+  if (rowSes) rowSes.style.display = (tipo === 'bono' || tipo === 'ep') ? '' : 'none';
+  const precioBonoCampo = document.getElementById('campo-precio-bono');
+  if (precioBonoCampo) precioBonoCampo.style.display = tipo === 'ep' ? '' : 'none';
 }
 
 function guardarSocio() {
@@ -1589,9 +1612,10 @@ function guardarSocio() {
     baja: document.getElementById('s-baja').value || null,
     tipo,
     tarifa: tipo === 'tarifa' ? document.getElementById('s-tarifa').value : null,
-    bono: tipo === 'bono' ? document.getElementById('s-bono').value : null,
-    sesTotales: tipo === 'bono' ? parseInt(document.getElementById('s-ses-total').value) : null,
-    sesRestantes: tipo === 'bono' ? parseInt(document.getElementById('s-ses-rest').value) : null,
+    bono: tipo === 'bono' ? document.getElementById('s-bono').value : (tipo === 'ep' ? (document.getElementById('s-ep-desc') ? document.getElementById('s-ep-desc').value.trim() : '') : null),
+    sesTotales: (tipo === 'bono' || tipo === 'ep') ? parseInt(document.getElementById('s-ses-total').value) : null,
+    sesRestantes: (tipo === 'bono' || tipo === 'ep') ? parseInt(document.getElementById('s-ses-rest').value) : null,
+    precioBono: tipo === 'ep' && document.getElementById('s-precio-bono') ? parseFloat(document.getElementById('s-precio-bono').value) || null : null,
     actividades: document.getElementById('s-actividades').value.trim(),
     pago: document.getElementById('s-pago').value,
     ultPago: document.getElementById('s-ult-pago').value || null,
@@ -1602,15 +1626,24 @@ function guardarSocio() {
     const idx = socios.findIndex(x => x.id === socioEditando);
     data.id = socioEditando;
     data.pagos = socios[idx].pagos || [];
+    // Preservar estado y sesiones existentes si no cambian
+    data.estado = socios[idx].estado || 'activo';
+    data.sesiones = socios[idx].sesiones || [];
     socios[idx] = data;
   } else {
     data.id = Date.now();
+    data.estado = 'activo';
+    data.sesiones = [];
     socios.push(data);
   }
 
-  save();
-  closeModal('modal-socio');
-  renderSocios();
+  (async () => {
+    try { await save({ flush: true }); }
+    catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: los cambios NO se han guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) perderás los cambios.'); return; }
+    closeModal('modal-socio');
+    renderSocios();
+    if (typeof renderDashboard === 'function') renderDashboard();
+  })();
 }
 
 function eliminarSocio(id) {
@@ -2571,6 +2604,10 @@ function abrirModalSocio() {
   document.getElementById('s-actividades').value = '';
   document.getElementById('s-pago').value = 'pagado';
   document.getElementById('s-ult-pago').value = '';
+  const epd = document.getElementById('s-ep-desc'); if (epd) epd.value = '';
+  const pb = document.getElementById('s-precio-bono'); if (pb) pb.value = '';
+  document.getElementById('s-ses-total').value = 10;
+  document.getElementById('s-ses-rest').value = 10;
   toggleTipoFields();
   openModal('modal-socio');
 }
@@ -2595,10 +2632,15 @@ function editarSocio(id) {
   toggleTipoFields();
   if (s.tipo === 'tarifa') {
     document.getElementById('s-tarifa').value = s.tarifa;
-  } else {
+  } else if (s.tipo === 'bono') {
     document.getElementById('s-bono').value = s.bono;
-    document.getElementById('s-ses-total').value = s.sesTotales;
-    document.getElementById('s-ses-rest').value = s.sesRestantes;
+    document.getElementById('s-ses-total').value = s.sesTotales || 10;
+    document.getElementById('s-ses-rest').value = s.sesRestantes || 0;
+  } else if (s.tipo === 'ep') {
+    const epd = document.getElementById('s-ep-desc'); if (epd) epd.value = s.bono || '';
+    document.getElementById('s-ses-total').value = s.sesTotales || 8;
+    document.getElementById('s-ses-rest').value = s.sesRestantes || 0;
+    const pb = document.getElementById('s-precio-bono'); if (pb) pb.value = s.precioBono || '';
   }
   openModal('modal-socio');
 }
@@ -2607,7 +2649,12 @@ function toggleTipoFields() {
   const tipo = document.getElementById('s-tipo').value;
   document.getElementById('campo-tarifa').style.display = tipo === 'tarifa' ? '' : 'none';
   document.getElementById('campo-bono').style.display = tipo === 'bono' ? '' : 'none';
-  document.getElementById('bono-sesiones-row').style.display = tipo === 'bono' ? '' : 'none';
+  const epCampo = document.getElementById('campo-ep');
+  if (epCampo) epCampo.style.display = tipo === 'ep' ? '' : 'none';
+  const rowSes = document.getElementById('bono-sesiones-row');
+  if (rowSes) rowSes.style.display = (tipo === 'bono' || tipo === 'ep') ? '' : 'none';
+  const precioBonoCampo = document.getElementById('campo-precio-bono');
+  if (precioBonoCampo) precioBonoCampo.style.display = tipo === 'ep' ? '' : 'none';
 }
 
 function guardarSocio() {
@@ -2625,9 +2672,10 @@ function guardarSocio() {
     baja: document.getElementById('s-baja').value || null,
     tipo,
     tarifa: tipo === 'tarifa' ? document.getElementById('s-tarifa').value : null,
-    bono: tipo === 'bono' ? document.getElementById('s-bono').value : null,
-    sesTotales: tipo === 'bono' ? parseInt(document.getElementById('s-ses-total').value) : null,
-    sesRestantes: tipo === 'bono' ? parseInt(document.getElementById('s-ses-rest').value) : null,
+    bono: tipo === 'bono' ? document.getElementById('s-bono').value : (tipo === 'ep' ? (document.getElementById('s-ep-desc') ? document.getElementById('s-ep-desc').value.trim() : '') : null),
+    sesTotales: (tipo === 'bono' || tipo === 'ep') ? parseInt(document.getElementById('s-ses-total').value) : null,
+    sesRestantes: (tipo === 'bono' || tipo === 'ep') ? parseInt(document.getElementById('s-ses-rest').value) : null,
+    precioBono: tipo === 'ep' && document.getElementById('s-precio-bono') ? parseFloat(document.getElementById('s-precio-bono').value) || null : null,
     actividades: document.getElementById('s-actividades').value.trim(),
     pago: document.getElementById('s-pago').value,
     ultPago: document.getElementById('s-ult-pago').value || null,
@@ -2638,15 +2686,24 @@ function guardarSocio() {
     const idx = socios.findIndex(x => x.id === socioEditando);
     data.id = socioEditando;
     data.pagos = socios[idx].pagos || [];
+    // Preservar estado y sesiones existentes si no cambian
+    data.estado = socios[idx].estado || 'activo';
+    data.sesiones = socios[idx].sesiones || [];
     socios[idx] = data;
   } else {
     data.id = Date.now();
+    data.estado = 'activo';
+    data.sesiones = [];
     socios.push(data);
   }
 
-  save();
-  closeModal('modal-socio');
-  renderSocios();
+  (async () => {
+    try { await save({ flush: true }); }
+    catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: los cambios NO se han guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) perderás los cambios.'); return; }
+    closeModal('modal-socio');
+    renderSocios();
+    if (typeof renderDashboard === 'function') renderDashboard();
+  })();
 }
 
 function eliminarSocio(id) {
