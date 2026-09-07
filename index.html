@@ -813,6 +813,7 @@
               <th>Concepto</th>
               <th>Forma de Pago</th>
               <th>Importe</th>
+              <th style="width:60px"></th>
             </tr>
           </thead>
           <tbody id="pagos-tbody"></tbody>
@@ -1863,7 +1864,7 @@ function renderPagosTabla() {
 
   const tbody = document.getElementById('pagos-tbody');
   if (pagos.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">No hay pagos</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray-400)">No hay pagos</td></tr>`;
   } else {
     tbody.innerHTML = pagos.map(p => {
       const formaColor = p.forma === 'TPV' ? 'badge-green' : p.forma === 'Efectivo' ? 'badge-yellow' : p.forma === 'Transferencia' ? 'badge-blue' : 'badge-gray';
@@ -1873,6 +1874,7 @@ function renderPagosTabla() {
         <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
         <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
         <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
+        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${JSON.stringify(String(p.id))})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -2289,7 +2291,7 @@ function renderPagosTablaFiltrada() {
 
   const tbody = document.getElementById('pagos-tbody');
   if (pagos.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">Sin pagos para este filtro</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray-400)">Sin pagos para este filtro</td></tr>`;
   } else {
     tbody.innerHTML = pagos.map(p => {
       const formaColor = p.forma === 'TPV' ? 'badge-green' : p.forma === 'Efectivo' ? 'badge-yellow' : p.forma === 'Transferencia' ? 'badge-blue' : 'badge-gray';
@@ -2300,6 +2302,7 @@ function renderPagosTablaFiltrada() {
         <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
         <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
         <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
+        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${JSON.stringify(String(p.id))})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -3107,7 +3110,7 @@ function renderPagosTablaFiltrada() {
 
   const tbody = document.getElementById('pagos-tbody');
   if (pagos.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--gray-400)">Sin pagos para este filtro</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--gray-400)">Sin pagos para este filtro</td></tr>`;
   } else {
     tbody.innerHTML = pagos.map(p => {
       const formaColor = p.forma === 'TPV' ? 'badge-green' : p.forma === 'Efectivo' ? 'badge-yellow' : p.forma === 'Transferencia' ? 'badge-blue' : 'badge-gray';
@@ -3118,6 +3121,7 @@ function renderPagosTablaFiltrada() {
         <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
         <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
         <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
+        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${JSON.stringify(String(p.id))})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -3510,6 +3514,32 @@ async function deshacerSyncActivosUI() {
   if (typeof renderDashboard === 'function') renderDashboard();
   if (typeof renderPagosTabla === 'function') renderPagosTabla();
   alert(`✓ Sync deshecho:\n · ${eliminados} socios eliminados\n · ${restaurados} socios restaurados a su estado previo`);
+}
+
+// Borra un pago concreto del registro (usado por el botón 🗑 en cada fila).
+// Recalcula ultPago del socio y persiste inmediato a Supabase.
+async function borrarPagoRegistro(socioId, pagoId) {
+  const s = socios.find(x => x.id === socioId || Number(x.id) === Number(socioId));
+  if (!s) { alert('No he podido localizar al socio de este pago.'); return; }
+  const idx = (s.pagos || []).findIndex(p => String(p.id) === String(pagoId));
+  if (idx === -1) { alert('No he podido localizar el pago (puede que ya se haya borrado).'); return; }
+  const p = s.pagos[idx];
+  const resumen = `${formatDate(p.fecha)} · ${s.nombre} ${s.apellidos||''} · ${parseFloat(p.importe).toFixed(2)}€ · ${p.concepto||''}`;
+  if (!confirm(`¿Borrar este pago?\n\n${resumen}\n\nEsta acción no se puede deshacer.`)) return;
+
+  s.pagos.splice(idx, 1);
+  if (s.pagos.length > 0) {
+    const sorted = [...s.pagos].sort((a,b) => (b.fecha||'').localeCompare(a.fecha||''));
+    s.ultPago = sorted[0].fecha;
+  } else {
+    s.ultPago = null;
+  }
+
+  try { await save({ flush: true }); }
+  catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: el borrado NO se ha guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) el pago volverá a aparecer.'); return; }
+  renderPagosTabla();
+  if (typeof renderSocios === 'function') renderSocios();
+  if (typeof renderDashboard === 'function') renderDashboard();
 }
 
 function borrarPagosCorruptosUI() {
