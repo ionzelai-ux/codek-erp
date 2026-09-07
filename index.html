@@ -1874,7 +1874,7 @@ function renderPagosTabla() {
         <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
         <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
         <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
-        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${JSON.stringify(String(p.id))})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
+        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${p.id})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -2302,7 +2302,7 @@ function renderPagosTablaFiltrada() {
         <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
         <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
         <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
-        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${JSON.stringify(String(p.id))})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
+        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${p.id})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -3121,7 +3121,7 @@ function renderPagosTablaFiltrada() {
         <td style="color:var(--gray-300);font-size:13px">${p.concepto}</td>
         <td><span class="stat-badge ${formaColor}">${p.forma}</span></td>
         <td style="font-family:var(--font-display);font-size:15px;font-weight:700">${parseFloat(p.importe).toFixed(2)} €</td>
-        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${JSON.stringify(String(p.id))})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
+        <td style="text-align:right"><button class="action-btn" title="Borrar este pago" onclick="borrarPagoRegistro(${p.socioId}, ${p.id})" style="color:#e07070;border-color:#8B2020">🗑</button></td>
       </tr>`;
     }).join('');
   }
@@ -3519,9 +3519,9 @@ async function deshacerSyncActivosUI() {
 // Borra un pago concreto del registro (usado por el botón 🗑 en cada fila).
 // Recalcula ultPago del socio y persiste inmediato a Supabase.
 async function borrarPagoRegistro(socioId, pagoId) {
-  const s = socios.find(x => x.id === socioId || Number(x.id) === Number(socioId));
+  const s = socios.find(x => Number(x.id) === Number(socioId));
   if (!s) { alert('No he podido localizar al socio de este pago.'); return; }
-  const idx = (s.pagos || []).findIndex(p => String(p.id) === String(pagoId));
+  const idx = (s.pagos || []).findIndex(p => Number(p.id) === Number(pagoId));
   if (idx === -1) { alert('No he podido localizar el pago (puede que ya se haya borrado).'); return; }
   const p = s.pagos[idx];
   const resumen = `${formatDate(p.fecha)} · ${s.nombre} ${s.apellidos||''} · ${parseFloat(p.importe).toFixed(2)}€ · ${p.concepto||''}`;
