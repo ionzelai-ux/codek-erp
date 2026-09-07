@@ -800,6 +800,8 @@
               ↑ IMPORTAR EXCEL
               <input type="file" accept=".xlsx,.xls" onchange="importarExcelPagos(event)" style="display:none" />
             </label>
+            <button class="btn btn-ghost btn-sm" style="color:#e07070;border-color:#8B2020" onclick="borrarPagosCorruptosUI()" title="Eliminar pagos con fecha en formato inválido">🗑 LIMPIAR ROTOS</button>
+            <button class="btn btn-ghost btn-sm" style="color:#e9c46a;border-color:#b5830a" onclick="deshacerUltimoImportUI()" title="Deshacer la última importación desde Excel">↩ DESHACER IMPORT</button>
             <button class="btn btn-primary btn-sm" onclick="generarFacturasDesdeRegistro()">GENERAR FACTURAS</button>
           </div>
         </div>
@@ -1156,11 +1158,18 @@ async function dbSelect(table, order) {
 
 async function dbUpsert(table, rows) {
   if (!rows || !rows.length) return;
-  await fetch(SUPA_URL + '/rest/v1/' + table, {
+  const r = await fetch(SUPA_URL + '/rest/v1/' + table, {
     method: 'POST',
     headers: Object.assign({}, SUPA_H, {'Prefer': 'resolution=merge-duplicates,return=minimal'}),
     body: JSON.stringify(rows)
   });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    const err = new Error(`dbUpsert ${table} → HTTP ${r.status}: ${body.slice(0,500)}`);
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
 }
 
 async function loadFromSupabase() {
@@ -1198,26 +1207,25 @@ async function loadFromSupabase() {
 }
 
 async function saveToSupabase() {
-  try {
-    const sociosDB = socios.map(s => ({
-      id: s.id, nombre: s.nombre, apellidos: s.apellidos || '',
-      email: s.email || '', tel: s.tel || '', dni: s.dni || '',
-      alta: s.alta || null, baja: s.baja || null, tipo: s.tipo,
-      tarifa: s.tarifa || '', bono: s.bono || null,
-      ses_totales: s.sesTotales, ses_restantes: s.sesRestantes,
-      precio_bono: s.precioBono || null, actividades: s.actividades || '',
-      pago: s.pago, ult_pago: s.ultPago || null, estado: s.estado,
-      nota_especial: s.notaEspecial || '',
-      pagos: s.pagos || [], sesiones: s.sesiones || []
-    }));
-    await dbUpsert('socios', sociosDB);
-    if (wellhubData.length) {
-      await dbUpsert('wellhub', wellhubData.map(w => ({
-        id: w.id, mes: w.mes, anyo: w.anyo,
-        importe: w.importe, estado: w.estado, notas: w.notas || ''
-      })));
-    }
-  } catch(e) { console.error('Supabase save error:', e); }
+  const sociosDB = socios.map(s => ({
+    id: Math.floor(Number(s.id)), // fuerza INTEGER: Supabase rechaza decimales silenciosamente
+    nombre: s.nombre, apellidos: s.apellidos || '',
+    email: s.email || '', tel: s.tel || '', dni: s.dni || '',
+    alta: s.alta || null, baja: s.baja || null, tipo: s.tipo,
+    tarifa: s.tarifa || '', bono: s.bono || null,
+    ses_totales: s.sesTotales, ses_restantes: s.sesRestantes,
+    precio_bono: s.precioBono || null, actividades: s.actividades || '',
+    pago: s.pago, ult_pago: s.ultPago || null, estado: s.estado,
+    nota_especial: s.notaEspecial || '',
+    pagos: s.pagos || [], sesiones: s.sesiones || []
+  }));
+  await dbUpsert('socios', sociosDB);
+  if (wellhubData.length) {
+    await dbUpsert('wellhub', wellhubData.map(w => ({
+      id: Math.floor(Number(w.id)), mes: w.mes, anyo: w.anyo,
+      importe: w.importe, estado: w.estado, notas: w.notas || ''
+    })));
+  }
 }
 
 // ===== DATA =====
@@ -1248,13 +1256,20 @@ function agotarBono(id) {
   renderSocios();
 }
 
-function save() {
-  clearTimeout(window._saveTimer);
-  window._saveTimer = setTimeout(saveToSupabase, 800);
+// save() guarda en localStorage y programa saveToSupabase con debounce de 800ms.
+// Con { flush: true } cancela el debounce y sube a Supabase inmediatamente,
+// devolviendo la Promise para poder awaitearlo (crítico tras un import para
+// que un F5 posterior no pierda los cambios).
+function save(opts) {
   localStorage.setItem('ck_socios', JSON.stringify(socios));
   localStorage.setItem('ck_fventa', JSON.stringify(facturasVenta));
   localStorage.setItem('ck_fcompra', JSON.stringify(facturasCompra));
   localStorage.setItem('ck_wellhub', JSON.stringify(wellhubData));
+  clearTimeout(window._saveTimer);
+  if (opts && opts.flush) {
+    return saveToSupabase();
+  }
+  window._saveTimer = setTimeout(saveToSupabase, 800);
 }
 
 // ===== NAV =====
@@ -1284,6 +1299,11 @@ function navTo(page, el) {
         <button class="btn btn-ghost btn-sm" onclick="setSociosOrden('nombre')" id="btn-ord-nombre" style="border-color:var(--red);color:var(--white)">A–Z</button>
         <button class="btn btn-ghost btn-sm" onclick="setSociosOrden('alta')" id="btn-ord-alta">Fecha alta</button>
         <button class="btn btn-ghost btn-sm" onclick="exportarSociosExcel()" style="color:#52b788;border-color:#2d6a4f">↓ Excel</button>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer;color:#74b3e8;border-color:#1e6480" title="Sincroniza tipo (bono/tarifa) y estado (activo/baja) desde el Excel de clientes activos">
+          ↑ SYNC ACTIVOS
+          <input type="file" accept=".xls,.xlsx" onchange="sincronizarClientesActivos(event)" style="display:none" />
+        </label>
+        <button class="btn btn-ghost btn-sm" style="color:#e9c46a;border-color:#b5830a" onclick="deshacerSyncActivosUI()" title="Deshacer la última sincronización">↩ DESHACER SYNC</button>
         <button class="btn btn-primary" onclick="abrirModalSocio()">+ NUEVO SOCIO</button>
       </div>`;
   } else if (page === 'fact-compra') {
@@ -2422,7 +2442,7 @@ function importarExcelPagos(event) {
 
         // Add payment
         if (!socio.pagos) socio.pagos = [];
-        socio.pagos.push({ fecha, concepto, importe, forma, id: Date.now() + Math.random() });
+        socio.pagos.push({ fecha, concepto, importe, forma, id: Date.now() * 1000 + Math.floor(Math.random() * 1000) });
         socio.ultPago = socio.ultPago && socio.ultPago > fecha ? socio.ultPago : fecha;
         existingKeys.add(key);
         added++;
@@ -3153,111 +3173,774 @@ function irASociosFiltro(filtro) {
 
 
 // ===== IMPORTAR EXCEL PAGOS =====
-function importarExcelPagos(event) {
+
+// --- Helpers ---
+function _normNombre(s) {
+  return (s == null ? '' : String(s))
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _parseFecha(raw, esFormatoUS) {
+  if (raw == null || raw === '') return '';
+  // Objeto Date directo (cuando SheetJS lo entrega así)
+  if (raw instanceof Date) {
+    if (isNaN(raw.getTime())) return '';
+    const y = raw.getFullYear();
+    const m = String(raw.getMonth() + 1).padStart(2, '0');
+    const d = String(raw.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(raw).trim();
+  // YYYY-MM-DD o YYYY/MM/DD
+  let m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  // Serial de Excel (número puro 5-6 dígitos)
+  if (/^\d{5,6}$/.test(s)) {
+    const d = new Date(Date.UTC(1899, 11, 30) + parseInt(s) * 86400000);
+    if (!isNaN(d.getTime())) {
+      const y = d.getUTCFullYear();
+      const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const da = String(d.getUTCDate()).padStart(2, '0');
+      return `${y}-${mo}-${da}`;
+    }
+  }
+  // D/M/YYYY o M/D/YYYY (año 4 dígitos)
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) {
+    const a = parseInt(m[1]), b = parseInt(m[2]), y = m[3];
+    const mes = esFormatoUS ? a : b;
+    const dia = esFormatoUS ? b : a;
+    return `${y}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+  }
+  // D/M/YY o M/D/YY (año 2 dígitos → 20YY si <70, 19YY si >=70)
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (m) {
+    const a = parseInt(m[1]), b = parseInt(m[2]);
+    const yRaw = parseInt(m[3]);
+    const y = yRaw < 70 ? 2000 + yRaw : 1900 + yRaw;
+    const mes = esFormatoUS ? a : b;
+    const dia = esFormatoUS ? b : a;
+    return `${y}-${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+  }
+  return '';
+}
+
+function _detectarFormatoUS(rows, getFechaRaw) {
+  let us = 0, eu = 0;
+  for (const row of rows) {
+    const raw = getFechaRaw(row);
+    if (!raw || raw instanceof Date) continue;
+    const m = String(raw).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-]/);
+    if (!m) continue;
+    const a = parseInt(m[1]), b = parseInt(m[2]);
+    if (a > 12 && b <= 12) eu++;         // primer campo > 12 → seguro D/M
+    else if (b > 12 && a <= 12) us++;    // segundo campo > 12 → seguro M/D
+  }
+  return us > eu; // si empatan (o no hay evidencia), asumimos europeo
+}
+
+function _tieneFechasCorruptas() {
+  return socios.some(s => (s.pagos || []).some(p => p.fecha && !/^\d{4}-\d{2}-\d{2}$/.test(p.fecha)));
+}
+
+function limpiarPagosCorruptos() {
+  let count = 0;
+  socios.forEach(s => {
+    const antes = (s.pagos || []).length;
+    s.pagos = (s.pagos || []).filter(p => /^\d{4}-\d{2}-\d{2}$/.test(p.fecha || ''));
+    count += antes - s.pagos.length;
+    if (s.pagos.length > 0) {
+      const sorted = [...s.pagos].sort((a,b) => (b.fecha||'').localeCompare(a.fecha||''));
+      s.ultPago = sorted[0].fecha;
+    } else {
+      s.ultPago = null;
+    }
+  });
+  return count;
+}
+
+// ===== SYNC CLIENTES ACTIVOS =====
+// Lee el Excel canónico (fichero "clientes activos") con columnas
+// ID / Cliente / Tarifas actuales / Fecha de alta / Estado
+// y sincroniza tipo (bono/tarifa/ep) + estado (activo) de los socios.
+// Los socios con tipo="tarifa" que NO aparezcan en el Excel se marcan baja.
+// Los bono/EP que no aparezcan se dejan como están (no se auto-baja).
+function sincronizarClientesActivos(event) {
   const file = event.target.files[0];
   if (!file) return;
-  event.target.value = ''; // reset so same file can be re-imported
+  event.target.value = '';
 
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       const wb = XLSX.read(e.target.result, { type: 'binary', cellDates: true });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { raw: false, dateNF: 'yyyy-mm-dd' });
+      const rows = XLSX.utils.sheet_to_json(ws, { raw: true, defval: '' });
 
-      // Build existing payment fingerprints to avoid duplicates
-      // fingerprint = fecha|socioNombre(lower)|importe
-      const existingKeys = new Set();
-      socios.forEach(s => {
-        (s.pagos || []).forEach(p => {
-          const key = `${p.fecha}|${(s.nombre + ' ' + s.apellidos).toLowerCase().trim()}|${parseFloat(p.importe).toFixed(2)}`;
-          existingKeys.add(key);
-        });
-      });
+      const syncBatch = 'sync_' + Date.now();
+      const nombresEnExcel = new Set();          // clientes activos declarados
+      const nombresSinTarifaEnExcel = new Set(); // declarados explícitamente como "Sin tarifas asignadas"
+      const stats = { creados: 0, actualizados: 0, baja: 0, ambiguos: 0, sinCambio: 0, saltadosSinTarifa: 0, omitidosSinHistorial: 0 };
+      const detalle = { creados: [], actualizados: [], baja: [], ambiguos: [], saltadosSinTarifa: [], omitidosSinHistorial: [] };
 
-      // Expected columns (flexible matching):
-      // Date/Fecha, Name/Nombre/Cliente/Socio, Amount/Importe/Cantidad, Concept/Concepto, Payment/Forma
-      let added = 0, skipped = 0, unmatched = [];
+      const marcarPrev = s => {
+        if (s._prevSyncBatch !== syncBatch) {
+          s._prevSyncBatch = syncBatch;
+          s._prevSyncEstado = s.estado;
+          s._prevSyncBaja = s.baja;
+          s._prevSyncTipo = s.tipo;
+          s._prevSyncTarifa = s.tarifa;
+          s._prevSyncBono = s.bono;
+        }
+      };
 
       rows.forEach(row => {
-        // Detect column names flexibly
-        const keys = Object.keys(row);
+        // Detección flexible de columnas
         const getCol = (...names) => {
+          const keys = Object.keys(row);
           for (const n of names) {
             const k = keys.find(k => k.toLowerCase().includes(n.toLowerCase()));
-            if (k && row[k] !== undefined && row[k] !== '') return String(row[k]).trim();
+            if (k && row[k] !== undefined && row[k] !== '' && row[k] !== null) return row[k];
           }
           return '';
         };
+        const nombreRaw = getCol('cliente', 'nombre', 'socio');
+        if (!nombreRaw) return;
+        const nombre = String(nombreRaw).replace(/\s+/g, ' ').trim();
 
-        // Parse date - could be serial number or string
-        let fechaRaw = getCol('fecha', 'date', 'día', 'dia', 'f.');
-        let fecha = '';
-        if (fechaRaw) {
-          // Try to parse as date string or serial
-          if (/^\d{5}$/.test(fechaRaw)) {
-            // Excel serial
-            const d = new Date(Date.UTC(1899, 11, 30) + parseInt(fechaRaw) * 86400000);
-            fecha = d.toISOString().split('T')[0];
-          } else if (/^\d{4}-\d{2}-\d{2}/.test(fechaRaw)) {
-            fecha = fechaRaw.substring(0, 10);
-          } else if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/.test(fechaRaw)) {
-            const parts = fechaRaw.split(/[\/\-]/);
-            fecha = parts[2] + '-' + parts[1].padStart(2,'0') + '-' + parts[0].padStart(2,'0');
-          } else {
-            fecha = fechaRaw.substring(0, 10);
-          }
-        }
+        const tarifaRaw = String(getCol('tarifa', 'tarifas', 'servicio', 'concepto') || '').trim();
 
-        if (!fecha) { skipped++; return; }
-
-        const nombreRaw = getCol('nombre', 'name', 'cliente', 'socio', 'etiqueta');
-        const importeRaw = getCol('importe', 'amount', 'cantidad', 'total', 'precio');
-        const concepto = getCol('concepto', 'concept', 'descripcion', 'descripción', 'tarifa', 'servicio') || nombreRaw;
-        const forma = getCol('forma', 'payment', 'pago', 'metodo', 'método') || 'TPV';
-        const importe = parseFloat((importeRaw || '0').replace(',', '.')) || 0;
-
-        if (!nombreRaw || importe === 0) { skipped++; return; }
-
-        // Match socio by name (fuzzy)
-        const nombreLower = nombreRaw.toLowerCase().trim();
-        let socio = socios.find(s => {
-          const sNombre = (s.nombre + ' ' + s.apellidos).toLowerCase().trim();
-          const sNombre2 = (s.apellidos + ' ' + s.nombre).toLowerCase().trim();
-          return sNombre === nombreLower || sNombre2 === nombreLower ||
-                 sNombre.includes(nombreLower) || nombreLower.includes(s.nombre.toLowerCase());
-        });
-
-        if (!socio) {
-          unmatched.push(nombreRaw);
-          skipped++;
+        // Filas "Sin tarifas asignadas" en el canónico: declaración explícita de
+        // que ese cliente NO es activo. No se crean/actualizan como activos, pero
+        // los registramos aparte para poder marcar baja a bonos/EP existentes que
+        // aparezcan aquí (con historial de pagos).
+        if (!tarifaRaw || /sin\s+tarifas?\s+asignad/i.test(tarifaRaw)) {
+          stats.saltadosSinTarifa++;
+          detalle.saltadosSinTarifa.push(nombre);
+          nombresSinTarifaEnExcel.add(_normNombre(nombre));
           return;
         }
 
-        // Check duplicate
-        const key = `${fecha}|${(socio.nombre + ' ' + socio.apellidos).toLowerCase().trim()}|${importe.toFixed(2)}`;
-        if (existingKeys.has(key)) { skipped++; return; }
+        const nombreNorm = _normNombre(nombre);
+        nombresEnExcel.add(nombreNorm);
 
-        // Add payment
-        if (!socio.pagos) socio.pagos = [];
-        socio.pagos.push({ fecha, concepto, importe, forma, id: Date.now() + Math.random() });
-        socio.ultPago = socio.ultPago && socio.ultPago > fecha ? socio.ultPago : fecha;
-        existingKeys.add(key);
-        added++;
+        let tipo = 'tarifa';
+        if (/bono/i.test(tarifaRaw)) tipo = 'bono';
+        else if (/entreno\s+personal/i.test(tarifaRaw)) tipo = 'ep';
+
+        // Match por nombre exacto normalizado
+        const matches = socios.filter(s => _normNombre(s.nombre + ' ' + s.apellidos) === nombreNorm);
+
+        if (matches.length === 1) {
+          const s = matches[0];
+          const cambio = s.tipo !== tipo || s.estado !== 'activo' || s.baja;
+          if (cambio) {
+            marcarPrev(s);
+            s.tipo = tipo;
+            s.estado = 'activo';
+            s.baja = null;
+            if (tipo === 'tarifa' && !s.tarifa) s.tarifa = tarifaRaw;
+            if (tipo === 'bono' && !s.bono) s.bono = tarifaRaw;
+            stats.actualizados++;
+            detalle.actualizados.push(`${s.nombre} ${s.apellidos||''} → ${tipo}`);
+          } else {
+            stats.sinCambio++;
+          }
+        } else if (matches.length === 0) {
+          const partes = nombre.split(' ');
+          const nuevo = {
+            id: Date.now() * 1000 + Math.floor(Math.random() * 1000),
+            nombre: partes[0],
+            apellidos: partes.slice(1).join(' '),
+            dni: '',
+            tel: '',
+            email: '',
+            alta: new Date().toISOString().split('T')[0],
+            baja: null,
+            estado: 'activo',
+            tipo,
+            tarifa: tipo === 'tarifa' ? tarifaRaw : null,
+            bono: tipo === 'bono' ? tarifaRaw : null,
+            sesTotales: null,
+            sesRestantes: null,
+            actividades: '',
+            pago: 'pagado',
+            ultPago: null,
+            pagos: [],
+            _origen: 'excel-sync',
+            _syncBatch: syncBatch
+          };
+          socios.push(nuevo);
+          stats.creados++;
+          detalle.creados.push(`${nuevo.nombre} ${nuevo.apellidos} → ${tipo}`);
+        } else {
+          stats.ambiguos++;
+          detalle.ambiguos.push(`"${nombre}" matchea con ${matches.length} socios`);
+        }
       });
 
-      save();
-      renderPagosTabla();
+      // Marcar baja los tarifa que no están en el Excel — PERO solo si tienen historial
+      // de pagos. Si nunca pagaron es que nunca fueron realmente clientes activos,
+      // no hay que falsear el número de bajas.
+      socios.forEach(s => {
+        if (s.tipo !== 'tarifa') return;
+        const full = _normNombre(s.nombre + ' ' + s.apellidos);
+        if (nombresEnExcel.has(full)) return;
+        if (s.estado !== 'activo') return; // ya estaba baja
+        const tienePagos = Array.isArray(s.pagos) && s.pagos.length > 0;
+        if (!tienePagos) {
+          stats.omitidosSinHistorial++;
+          detalle.omitidosSinHistorial.push(`${s.nombre} ${s.apellidos||''}`);
+          return;
+        }
+        marcarPrev(s);
+        s.estado = 'baja';
+        s.baja = new Date().toISOString().split('T')[0];
+        stats.baja++;
+        detalle.baja.push(`${s.nombre} ${s.apellidos||''}`);
+      });
 
-      let msg = `✓ ${added} pago(s) importado(s) correctamente.\n${skipped} omitido(s) (ya existían o sin datos).`;
-      if (unmatched.length > 0) {
-        const uniqueUnmatched = [...new Set(unmatched)];
-        msg += `\n\nSocios no encontrados (${uniqueUnmatched.length}):\n${uniqueUnmatched.join('\n')}`;
+      // Marcar baja los bono/EP que aparecen explícitamente como "Sin tarifas asignadas"
+      // en el canónico (declaración explícita del user de que no es activo).
+      // Los bono/EP que NO aparecen en absoluto en el canónico se dejan como estén
+      // (esos los gestiona el user manualmente).
+      socios.forEach(s => {
+        if (s.tipo === 'tarifa') return; // ya procesados arriba
+        if (s.estado !== 'activo') return;
+        const full = _normNombre(s.nombre + ' ' + s.apellidos);
+        if (!nombresSinTarifaEnExcel.has(full)) return; // solo baja si canónico dice "sin tarifa"
+        const tienePagos = Array.isArray(s.pagos) && s.pagos.length > 0;
+        if (!tienePagos) {
+          stats.omitidosSinHistorial++;
+          detalle.omitidosSinHistorial.push(`${s.nombre} ${s.apellidos||''}`);
+          return;
+        }
+        marcarPrev(s);
+        s.estado = 'baja';
+        s.baja = new Date().toISOString().split('T')[0];
+        stats.baja++;
+        detalle.baja.push(`${s.nombre} ${s.apellidos||''} (${s.tipo} declarado como "sin tarifa" en canónico)`);
+      });
+
+      try { localStorage.setItem('ck_last_sync_batch', syncBatch); } catch(_){}
+
+      try { await save({ flush: true }); } catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: los cambios NO se han guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) perderás los cambios. Copia este mensaje y avisa antes de refrescar.'); }
+      if (typeof renderSocios === 'function') renderSocios();
+      if (typeof renderDashboard === 'function') renderDashboard();
+      if (typeof renderPagosTabla === 'function') renderPagosTabla();
+
+      console.group('👥 Sync clientes activos');
+      console.log('Batch:', syncBatch);
+      console.log('Stats:', stats);
+      console.log('Creados:', detalle.creados);
+      console.log('Actualizados:', detalle.actualizados);
+      console.log('Baja (tarifa no en Excel, con historial de pagos):', detalle.baja);
+      console.log('Saltados (sin tarifa asignada en el Excel):', detalle.saltadosSinTarifa);
+      console.log('Omitidos de baja (nunca pagaron):', detalle.omitidosSinHistorial);
+      if (detalle.ambiguos.length) console.log('Ambiguos:', detalle.ambiguos);
+      console.groupEnd();
+
+      let msg = `✓ Sincronización con Excel de clientes activos\n\n`;
+      msg += `Total filas leídas: ${rows.length}\n`;
+      msg += `Saltadas (sin tarifa asignada): ${stats.saltadosSinTarifa}\n\n`;
+      msg += `Resultado:\n`;
+      msg += `  · Nuevos socios creados: ${stats.creados}\n`;
+      msg += `  · Actualizados (tipo/estado): ${stats.actualizados}\n`;
+      msg += `  · Ya estaban al día: ${stats.sinCambio}\n`;
+      msg += `  · Nombres ambiguos: ${stats.ambiguos}\n`;
+      msg += `  · Marcados baja (tarifa fuera del Excel + con pagos): ${stats.baja}\n`;
+      msg += `  · Omitidos de baja (nunca pagaron): ${stats.omitidosSinHistorial}\n\n`;
+      msg += `Reglas aplicadas:\n`;
+      msg += `  · "Sin tarifas asignadas" en el canónico → baja (incluye bono/EP)\n`;
+      msg += `  · Bono/EP que NO aparecen en el canónico → no se tocan\n`;
+      msg += `  · Socios sin ningún pago histórico → no se marcan baja\n\n`;
+      if (detalle.baja.length > 0) {
+        const shown = detalle.baja.slice(0, 15);
+        msg += `Bajas aplicadas (${detalle.baja.length}${detalle.baja.length > 15 ? ', primeras 15' : ''}):\n${shown.join(', ')}\n\n`;
       }
+      msg += `(F12 → Consola para el detalle completo)`;
+      alert(msg);
+
+    } catch(err) {
+      alert('Error al leer el Excel de clientes activos: ' + err.message);
+      console.error(err);
+    }
+  };
+  reader.readAsBinaryString(file);
+}
+
+async function deshacerSyncActivosUI() {
+  const batch = localStorage.getItem('ck_last_sync_batch');
+  if (!batch) { alert('No hay ninguna sincronización registrada para deshacer.'); return; }
+  const creados = socios.filter(s => s._syncBatch === batch).length;
+  const modificados = socios.filter(s => s._prevSyncBatch === batch && s._syncBatch !== batch).length;
+  if (creados === 0 && modificados === 0) { alert('No queda nada de la última sincronización (ya se deshizo).'); return; }
+  if (!confirm(`Se deshará la última sincronización (${batch}):\n · ${creados} socios creados por sync se eliminan\n · ${modificados} socios recuperan su estado/tipo previo\n\n¿Continuar?`)) return;
+
+  // Restaurar socios modificados
+  let restaurados = 0;
+  socios.forEach(s => {
+    if (s._prevSyncBatch === batch && s._syncBatch !== batch) {
+      s.estado = s._prevSyncEstado;
+      s.baja = s._prevSyncBaja;
+      s.tipo = s._prevSyncTipo;
+      s.tarifa = s._prevSyncTarifa;
+      s.bono = s._prevSyncBono;
+      delete s._prevSyncBatch;
+      delete s._prevSyncEstado;
+      delete s._prevSyncBaja;
+      delete s._prevSyncTipo;
+      delete s._prevSyncTarifa;
+      delete s._prevSyncBono;
+      restaurados++;
+    }
+  });
+  // Eliminar socios creados por este sync
+  const _s = socios.filter(s => s._syncBatch !== batch);
+  const eliminados = socios.length - _s.length;
+  socios.length = 0;
+  _s.forEach(s => socios.push(s));
+
+  try { localStorage.removeItem('ck_last_sync_batch'); } catch(_){}
+  try { await save({ flush: true }); } catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: los cambios NO se han guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) perderás los cambios. Copia este mensaje y avisa antes de refrescar.'); }
+  if (typeof renderSocios === 'function') renderSocios();
+  if (typeof renderDashboard === 'function') renderDashboard();
+  if (typeof renderPagosTabla === 'function') renderPagosTabla();
+  alert(`✓ Sync deshecho:\n · ${eliminados} socios eliminados\n · ${restaurados} socios restaurados a su estado previo`);
+}
+
+function borrarPagosCorruptosUI() {
+  const total = socios.reduce((n,s) =>
+    n + (s.pagos||[]).filter(p => !/^\d{4}-\d{2}-\d{2}$/.test(p.fecha||'')).length, 0);
+  if (total === 0) { alert('No hay pagos con fecha rota. Todo limpio.'); return; }
+  if (!confirm(`Se han detectado ${total} pagos con fecha en formato inválido.\n\n¿Borrarlos todos? (Después puedes reimportar el Excel).`)) return;
+  const eliminados = limpiarPagosCorruptos();
+  save();
+  renderPagosTabla();
+  alert(`✓ ${eliminados} pagos eliminados. Ahora puedes reimportar el Excel.`);
+}
+
+// Devuelve la lista de meses YYYY-MM que "cubre" un pago. Además del mes de la
+// fecha, si el concepto trae un rango explícito tipo "8/2026 - 9/2026" o
+// "9/2026 - 11/2026", cuenta también todos esos meses. Así tarifas trimestrales
+// o pagos que cubren dos meses no dan bajas falsas.
+function _mesesCubiertosPorPago(pago) {
+  const meses = new Set();
+  if (pago.fecha) meses.add(pago.fecha.substring(0, 7));
+  const concepto = String(pago.concepto || '');
+  const m = concepto.match(/(\d{1,2})\s*[\/\.\-]\s*(\d{4})\s*[-–—]\s*(\d{1,2})\s*[\/\.\-]\s*(\d{4})/);
+  if (m) {
+    let y = parseInt(m[2]), mo = parseInt(m[1]);
+    const yEnd = parseInt(m[4]), moEnd = parseInt(m[3]);
+    let guard = 0;
+    while ((y < yEnd || (y === yEnd && mo <= moEnd)) && guard++ < 48) {
+      meses.add(`${y}-${String(mo).padStart(2,'0')}`);
+      mo++;
+      if (mo > 12) { mo = 1; y++; }
+    }
+  }
+  return [...meses];
+}
+
+// Recalcula estado (alta/baja) de socios tipo "tarifa" mes a mes, usando pagos como
+// evidencia. Si un mes no pagaron → baja el último día del mes. Si pagaron y estaban
+// baja → reactivación. Devuelve un resumen { 'YYYY-MM': { nuevas, reactivaciones, bajas } }.
+function procesarBajasAltasMensual(mesesRelevantes, batchId) {
+  const cambios = {};
+  mesesRelevantes.forEach(m => { cambios[m] = { nuevas: [], reactivaciones: [], bajas: [] }; });
+
+  // Snapshot del estado previo (una sola vez por socio y batch)
+  const marcarPrev = (s) => {
+    if (s._prevEstadoBatch !== batchId) {
+      s._prevEstadoBatch = batchId;
+      s._prevEstado = s.estado;
+      s._prevBaja = s.baja;
+    }
+  };
+
+  // 1) Nuevas altas: socios creados en el batch actual cuyo alta cae en un mes relevante
+  socios.forEach(s => {
+    if (s.tipo !== 'tarifa' || !s.alta) return;
+    const mesAlta = s.alta.substring(0, 7);
+    if (mesesRelevantes.includes(mesAlta) && s._altaBatch === batchId) {
+      cambios[mesAlta].nuevas.push(`${s.nombre} ${s.apellidos||''}`.trim());
+    }
+  });
+
+  // 2) Iterar meses en orden y actualizar estado
+  mesesRelevantes.forEach(mes => {
+    const [y, m] = mes.split('-').map(Number);
+    const ultimoDia = new Date(y, m, 0).getDate();
+    const fechaBaja = `${mes}-${String(ultimoDia).padStart(2,'0')}`;
+
+    const pagaronEsteMes = new Set();
+    socios.forEach(s => {
+      (s.pagos||[]).forEach(p => {
+        if (_mesesCubiertosPorPago(p).includes(mes)) pagaronEsteMes.add(s.id);
+      });
+    });
+
+    socios.forEach(s => {
+      if (s.tipo !== 'tarifa' || !s.alta) return;
+      const mesAlta = s.alta.substring(0, 7);
+      if (mesAlta > mes) return;
+
+      // Regla clave: solo aplicar auto-baja a socios que TIENEN historial de pagos.
+      // Los que nunca pagaron son perfiles fantasma; no falseemos el nº de bajas.
+      const tienePagos = Array.isArray(s.pagos) && s.pagos.length > 0;
+      if (!tienePagos) return;
+
+      if (pagaronEsteMes.has(s.id)) {
+        if (s.estado !== 'activo') {
+          marcarPrev(s);
+          s.estado = 'activo';
+          s.baja = null;
+          if (mesAlta !== mes) cambios[mes].reactivaciones.push(`${s.nombre} ${s.apellidos||''}`.trim());
+        }
+      } else {
+        if (s.estado === 'activo') {
+          marcarPrev(s);
+          s.estado = 'baja';
+          s.baja = fechaBaja;
+          cambios[mes].bajas.push(`${s.nombre} ${s.apellidos||''}`.trim());
+        }
+      }
+    });
+  });
+
+  return cambios;
+}
+
+async function deshacerUltimoImportUI() {
+  const batch = localStorage.getItem('ck_last_import_batch');
+  if (!batch) {
+    alert('No hay ninguna importación registrada para deshacer.\n\n(Solo se pueden deshacer imports hechos con el importador nuevo. Para pagos anteriores usa "Limpiar rotos" si tienen fecha inválida.)');
+    return;
+  }
+  const pagosBatch = socios.reduce((n,s) => n + (s.pagos||[]).filter(p => p._importBatch === batch).length, 0);
+  const sociosBatch = socios.filter(s => s._altaBatch === batch).length;
+  if (pagosBatch === 0 && sociosBatch === 0) {
+    alert('No quedan pagos ni socios de la última importación (ya se deshizo o fueron borrados).');
+    return;
+  }
+  if (!confirm(`Se eliminarán:\n · ${pagosBatch} pagos importados\n · ${sociosBatch} socios dados de alta en esta tanda\n\nBatch: ${batch}\n\n¿Continuar?`)) return;
+
+  // Quitar pagos del batch en todos los socios, recalcular ultPago y
+  // restaurar estado/baja si el batch los había cambiado
+  let pagosBorrados = 0;
+  let estadosRevertidos = 0;
+  socios.forEach(s => {
+    const antes = (s.pagos||[]).length;
+    s.pagos = (s.pagos||[]).filter(p => p._importBatch !== batch);
+    pagosBorrados += antes - s.pagos.length;
+    if (s.pagos.length > 0) {
+      const sorted = [...s.pagos].sort((a,b) => (b.fecha||'').localeCompare(a.fecha||''));
+      s.ultPago = sorted[0].fecha;
+    } else if (s._altaBatch !== batch) {
+      s.ultPago = null;
+    }
+    // Revertir estado si fue modificado por este batch
+    if (s._prevEstadoBatch === batch) {
+      s.estado = s._prevEstado;
+      s.baja = s._prevBaja;
+      delete s._prevEstado;
+      delete s._prevBaja;
+      delete s._prevEstadoBatch;
+      estadosRevertidos++;
+    }
+  });
+
+  // Quitar los socios dados de alta en este batch (todos sus pagos ya se limpiaron arriba)
+  const antesSocios = socios.length;
+  const _socios = socios.filter(s => s._altaBatch !== batch);
+  // Reasignar en el mismo array para no romper otras referencias
+  socios.length = 0;
+  _socios.forEach(s => socios.push(s));
+  const sociosBorrados = antesSocios - socios.length;
+
+  try { localStorage.removeItem('ck_last_import_batch'); } catch(_){}
+  try { await save({ flush: true }); } catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: los cambios NO se han guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) perderás los cambios. Copia este mensaje y avisa antes de refrescar.'); }
+  renderPagosTabla();
+  if (typeof renderSocios === 'function') renderSocios();
+  if (typeof renderDashboard === 'function') renderDashboard();
+  alert(`✓ Deshecho:\n · ${pagosBorrados} pagos eliminados\n · ${sociosBorrados} socios eliminados\n · ${estadosRevertidos} estados (alta/baja) revertidos\n\nYa puedes reimportar el Excel.`);
+}
+
+function importarExcelPagos(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = ''; // permite reimportar el mismo fichero
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'binary', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      // raw:true → mantiene los Date objects para poder parsearlos con precisión
+      const rows = XLSX.utils.sheet_to_json(ws, { raw: true, defval: '' });
+
+      // Cada importación lleva un batchId único → permite deshacer la última.
+      const batchId = 'imp_' + Date.now();
+
+      // Fingerprints existentes (fecha|nombreCompletoNormalizado|importe)
+      const existingKeys = new Set();
+      socios.forEach(s => {
+        (s.pagos || []).forEach(p => {
+          const k = `${p.fecha}|${_normNombre(s.nombre + ' ' + s.apellidos)}|${parseFloat(p.importe||0).toFixed(2)}`;
+          existingKeys.add(k);
+        });
+      });
+
+      // Lector flexible de columnas
+      const getCol = (row, ...names) => {
+        const keys = Object.keys(row);
+        for (const n of names) {
+          const k = keys.find(k => k.toLowerCase().includes(n.toLowerCase()));
+          if (k && row[k] !== undefined && row[k] !== '' && row[k] !== null) return row[k];
+        }
+        return '';
+      };
+
+      const getFechaRaw = r => getCol(r, 'fecha', 'date', 'día', 'dia', 'f.');
+      const esFormatoUS = _detectarFormatoUS(rows, getFechaRaw);
+
+      const stats = { added: 0, sinFecha: 0, sinNombre: 0, sinImporte: 0, duplicados: 0, noEncontrados: 0 };
+      const unmatched = [];
+      const dupDetalle = [];
+
+      const matchStats = { email: 0, tel: 0, nombreExacto: 0, pilaUnica: 0, creados: 0 };
+      const creadosDetalle = [];
+
+      rows.forEach((row, idx) => {
+        const fechaRaw   = getFechaRaw(row);
+        const nombreRaw  = getCol(row, 'nombre', 'name', 'cliente', 'socio', 'etiqueta');
+        const importeRaw = getCol(row, 'importe', 'amount', 'cantidad', 'total', 'precio');
+        const conceptoRaw= getCol(row, 'concepto', 'concept', 'descripcion', 'descripción', 'tarifa', 'servicio');
+        const formaRaw   = getCol(row, 'forma', 'estado', 'payment', 'pago', 'metodo', 'método');
+        const emailRaw   = getCol(row, 'correo', 'email', 'mail', 'e-mail');
+        const telRaw     = getCol(row, 'telefono', 'teléfono', 'movil', 'móvil', 'phone', 'tel');
+
+        const fecha = _parseFecha(fechaRaw, esFormatoUS);
+        if (!fecha) { stats.sinFecha++; console.log(`Fila ${idx+2}: sin fecha (raw:`, fechaRaw, ')'); return; }
+
+        const nombre = String(nombreRaw||'').replace(/\s+/g,' ').trim();
+        if (!nombre) { stats.sinNombre++; console.log(`Fila ${idx+2}: sin nombre`); return; }
+
+        const importeStr = String(importeRaw||'0').replace(/[^\d.,\-]/g,'').replace(',', '.');
+        const importe = parseFloat(importeStr) || 0;
+        if (importe === 0) { stats.sinImporte++; console.log(`Fila ${idx+2}: sin importe (raw:`, importeRaw, ')'); return; }
+
+        const concepto = String(conceptoRaw||nombre).trim();
+
+        // Forma de pago (soporta "TPV RedSys 05/09/2026" o solo "TPV")
+        let forma = 'TPV';
+        if (formaRaw) {
+          const fs = String(formaRaw).trim();
+          if (/tpv|redsys|tarjeta/i.test(fs)) forma = 'TPV';
+          else if (/transferencia/i.test(fs)) forma = 'Transferencia';
+          else if (/efectivo|cash/i.test(fs)) forma = 'Efectivo';
+          else if (/bizum/i.test(fs)) forma = 'Bizum';
+          else forma = fs.replace(/\d.*/, '').trim() || 'TPV';
+        }
+
+        // --- Match de socio: prioriza EMAIL y TELÉFONO sobre nombre ---
+        // Solo con datos duros (email/tel exactos) o nombre completo IDÉNTICO se acepta
+        // el match. Ninguna pasada de "startsWith" o "includes": eso contaminaba socios
+        // con nombres parecidos (Clara vs Clara Lastras, Sara vs Sara Fernandez Rico).
+        const nombreNorm = _normNombre(nombre);
+        const tokensExcel = nombreNorm.split(' ').filter(Boolean);
+        const emailNorm = String(emailRaw||'').trim().toLowerCase();
+        const telDigits = String(telRaw||'').replace(/\D/g, '');
+        let socio = null;
+        let matchBy = '';
+
+        // 1) Email exacto (el discriminador más fiable)
+        if (emailNorm) {
+          socio = socios.find(s => (s.email||'').trim().toLowerCase() === emailNorm);
+          if (socio) { matchBy = 'email'; matchStats.email++; }
+        }
+
+        // 2) Teléfono (últimos 9 dígitos para tolerar prefijos como +34)
+        if (!socio && telDigits.length >= 9) {
+          const t9 = telDigits.slice(-9);
+          const cand = socios.filter(s => {
+            const st = (s.tel||'').replace(/\D/g, '');
+            return st.length >= 9 && st.slice(-9) === t9;
+          });
+          if (cand.length === 1) { socio = cand[0]; matchBy = 'tel'; matchStats.tel++; }
+        }
+
+        // 3) Nombre completo idéntico (normalizado, acentos aparte)
+        if (!socio) {
+          socio = socios.find(s =>
+            _normNombre(s.nombre + ' ' + s.apellidos) === nombreNorm ||
+            _normNombre((s.apellidos||'') + ' ' + s.nombre) === nombreNorm);
+          if (socio) { matchBy = 'nombre-exacto'; matchStats.nombreExacto++; }
+        }
+
+        // 4) Un solo token en el Excel → SOLO si en la base existe UN socio cuyo
+        //    "nombre" es exactamente ese token y sin apellidos.
+        if (!socio && tokensExcel.length === 1) {
+          const target = tokensExcel[0];
+          const cand = socios.filter(s => {
+            const nn = _normNombre(s.nombre);
+            const aa = _normNombre(s.apellidos || '');
+            return nn === target && aa === '';
+          });
+          if (cand.length === 1) { socio = cand[0]; matchBy = 'pila-unica'; matchStats.pilaUnica++; }
+        }
+
+        // 5) Si sigue sin match → CREAR SOCIO NUEVO con los datos del Excel.
+        //    Primer token del nombre = nombre; el resto = apellidos.
+        if (!socio) {
+          const partes = nombre.split(' ');
+          const nuevoNombre = partes[0];
+          const nuevosApellidos = partes.slice(1).join(' ');
+          // Detectar tipo desde el concepto: "Bono X" → bono, "Entreno personal" → ep, resto → tarifa.
+          let tipoNuevo = 'tarifa';
+          if (/\bbono\b/i.test(concepto)) tipoNuevo = 'bono';
+          else if (/entreno\s+personal/i.test(concepto)) tipoNuevo = 'ep';
+          socio = {
+            id: Date.now() * 1000 + Math.floor(Math.random() * 1000),
+            nombre: nuevoNombre,
+            apellidos: nuevosApellidos,
+            dni: '',
+            tel: telRaw ? String(telRaw).trim() : '',
+            email: emailNorm || '',
+            alta: fecha,
+            baja: null,
+            estado: 'activo',
+            tipo: tipoNuevo,
+            tarifa: tipoNuevo === 'tarifa' ? concepto : null,
+            bono: tipoNuevo === 'bono' ? concepto : null,
+            sesTotales: null,
+            sesRestantes: null,
+            actividades: '',
+            pago: 'pagado',
+            ultPago: fecha,
+            pagos: [],
+            _origen: 'excel',
+            _altaBatch: batchId
+          };
+          socios.push(socio);
+          matchBy = 'creado';
+          matchStats.creados++;
+          creadosDetalle.push(`${nuevoNombre} ${nuevosApellidos}`.trim());
+          console.log(`Fila ${idx+2}: socio dado de alta: "${nombre}" (email:${emailNorm||'—'}, tel:${telRaw||'—'})`);
+        }
+
+        // Duplicado
+        const key = `${fecha}|${_normNombre(socio.nombre + ' ' + socio.apellidos)}|${importe.toFixed(2)}`;
+        if (existingKeys.has(key)) {
+          stats.duplicados++;
+          dupDetalle.push(`Fila ${idx+2}: ${fecha} · ${socio.nombre} ${socio.apellidos||''} · ${importe.toFixed(2)}€`);
+          return;
+        }
+
+        if (!socio.pagos) socio.pagos = [];
+        socio.pagos.push({ fecha, concepto, importe, forma, id: Date.now() * 1000 + Math.floor(Math.random() * 1000), _origen: 'excel', _importBatch: batchId });
+        socio.ultPago = socio.ultPago && socio.ultPago > fecha ? socio.ultPago : fecha;
+        existingKeys.add(key);
+        stats.added++;
+      });
+
+      // Guarda el último batch para el botón "DESHACER IMPORT"
+      try { localStorage.setItem('ck_last_import_batch', batchId); } catch(_){}
+
+      // Recalcular altas/bajas mes a mes en base a los pagos importados.
+      // IMPORTANTE: `mesesRelevantes` son SOLO los meses de las fechas de los
+      // pagos (sin expandir rangos del concepto). Si un pago dice "9/2026 - 11/2026"
+      // no añadimos noviembre a los meses a procesar (nadie más pagaría noviembre
+      // → bajas falsas masivas). La expansión del rango solo sirve para dar cobertura
+      // extra a un socio concreto dentro de un mes que ya se está procesando.
+      let mesesRelevantes = [...new Set(
+        socios.flatMap(s => (s.pagos||[])
+          .filter(p => p._importBatch === batchId)
+          .map(p => (p.fecha||'').substring(0,7)))
+      )].filter(Boolean).sort();
+
+      // Salvaguarda: si el ÚLTIMO mes del batch está aún en curso (fecha máxima
+      // dentro de ese mes es < día 25), no lo procesamos. Evita marcar baja a
+      // socios que aún no han pagado su cuota mensual pero lo harán más adelante
+      // (típico: batch importado a inicios de mes).
+      if (mesesRelevantes.length > 0) {
+        const ultimoMes = mesesRelevantes[mesesRelevantes.length - 1];
+        let maxDiaUltimoMes = 0;
+        socios.forEach(s => (s.pagos||[]).forEach(p => {
+          if (p._importBatch === batchId && p.fecha && p.fecha.substring(0,7) === ultimoMes) {
+            const dia = parseInt(p.fecha.substring(8,10));
+            if (dia > maxDiaUltimoMes) maxDiaUltimoMes = dia;
+          }
+        }));
+        if (maxDiaUltimoMes < 25) {
+          console.log(`Mes ${ultimoMes} en curso (máx día ${maxDiaUltimoMes}) → no se procesan bajas de ese mes`);
+          mesesRelevantes = mesesRelevantes.slice(0, -1);
+        }
+      }
+
+      const cambiosEstados = procesarBajasAltasMensual(mesesRelevantes, batchId);
+
+      // Persistir INMEDIATAMENTE en Supabase (bloqueante). Sin esto, un F5 antes
+      // de los 800ms del debounce perdería todo el import.
+      try { await save({ flush: true }); } catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: los cambios NO se han guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) perderás los cambios. Copia este mensaje y avisa antes de refrescar.'); }
+      renderPagosTabla();
+      if (typeof renderSocios === 'function') renderSocios();
+      if (typeof renderDashboard === 'function') renderDashboard();
+
+      console.group('📊 Importación de pagos — detalles');
+      console.log('Batch:', batchId);
+      console.log('Formato de fecha detectado:', esFormatoUS ? 'US (M/D/Y)' : 'EU (D/M/Y)');
+      console.log('Estadísticas:', stats);
+      console.log('Match por:', matchStats);
+      if (creadosDetalle.length) console.log('Socios dados de alta:', [...new Set(creadosDetalle)]);
+      if (dupDetalle.length) console.log('Duplicados omitidos:', dupDetalle);
+      console.log('Cambios de estado por mes:', cambiosEstados);
+      console.groupEnd();
+
+      const creadosUnicos = [...new Set(creadosDetalle)];
+
+      let msg = `✓ ${stats.added} pago(s) importado(s)\n`;
+      msg += `   · por email: ${matchStats.email}\n`;
+      msg += `   · por teléfono: ${matchStats.tel}\n`;
+      msg += `   · por nombre exacto: ${matchStats.nombreExacto}\n`;
+      msg += `   · por nombre de pila único: ${matchStats.pilaUnica}\n`;
+      msg += `   · en socio dado de alta: ${matchStats.creados}\n\n`;
+      msg += `👥 Socios nuevos dados de alta: ${creadosUnicos.length}\n\n`;
+      msg += `Omitidos:\n`;
+      msg += `  · Sin fecha: ${stats.sinFecha}\n`;
+      msg += `  · Sin nombre: ${stats.sinNombre}\n`;
+      msg += `  · Sin importe: ${stats.sinImporte}\n`;
+      msg += `  · Duplicados: ${stats.duplicados}\n\n`;
+      msg += `Formato fecha: ${esFormatoUS ? 'M/D/Y (US)' : 'D/M/Y (EU)'}\n`;
+      msg += `(F12 → Consola para ver detalle fila a fila)`;
+
+      if (creadosUnicos.length > 0) {
+        const shown = creadosUnicos.slice(0, 15);
+        msg += `\n\nDados de alta (${creadosUnicos.length}${creadosUnicos.length > 15 ? ', primeros 15' : ''}):\n${shown.join(', ')}`;
+        if (creadosUnicos.length > 15) msg += '\n...';
+      }
+
+      // Desglose mes a mes de altas/bajas (solo tipo=tarifa)
+      const MESES_ES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+      const mesesOrden = Object.keys(cambiosEstados).sort();
+      if (mesesOrden.length > 0) {
+        msg += `\n\n📅 Altas/bajas por mes (tarifa):`;
+        mesesOrden.forEach(mes => {
+          const c = cambiosEstados[mes];
+          const [y, m] = mes.split('-').map(Number);
+          const label = `${MESES_ES[m]} ${y}`;
+          msg += `\n  · ${label}: ${c.nuevas.length} nuevas + ${c.reactivaciones.length} reactivaciones · ${c.bajas.length} bajas`;
+        });
+      }
+
       alert(msg);
 
     } catch(err) {
       alert('Error al leer el Excel: ' + err.message);
+      console.error(err);
     }
   };
   reader.readAsBinaryString(file);
