@@ -717,6 +717,11 @@
           <div class="stat-value" id="stat-pendiente" style="color:#e07070">0</div>
           <div class="stat-sub">este mes →</div>
         </div>
+        <div class="stat-card" onclick="irASociosFiltro('proxima-baja')" style="cursor:pointer" onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
+          <div class="stat-label">Próximas Bajas</div>
+          <div class="stat-value" id="stat-proximas-bajas" style="color:#e9c46a">0</div>
+          <div class="stat-sub">activos con fecha baja →</div>
+        </div>
       </div>
 
       <div style="margin-bottom:28px">
@@ -751,6 +756,7 @@
         <button class="pill" data-filter="activo" onclick="toggleFiltroSocio(this)">Activos</button>
         <button class="pill" data-filter="baja" onclick="toggleFiltroSocio(this)">Baja</button>
         <button class="pill" data-filter="pausado" onclick="toggleFiltroSocio(this)">Pausados</button>
+        <button class="pill" data-filter="proxima-baja" onclick="toggleFiltroSocio(this)">Próximas bajas</button>
         <button class="pill" data-filter="ep" onclick="toggleFiltroSocio(this)">Entreno Personal</button>
         <button class="pill" data-filter="efectivo" onclick="toggleFiltroSocio(this)">Efectivo</button>
       </div>
@@ -977,6 +983,12 @@
           <input class="form-input" id="s-baja" type="date" />
         </div>
       </div>
+      <div class="form-row full">
+        <div class="form-group">
+          <label class="form-label">Fecha de próxima baja (opcional)</label>
+          <input class="form-input" id="s-proxima-baja" type="date" title="Si está en esta fecha o antes, se marcará baja automática al abrir la app." />
+        </div>
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Tipo de Vinculación</label>
@@ -1189,17 +1201,27 @@ async function loadFromSupabase() {
       dbSelect('wellhub', 'anyo')
     ]);
     if (sData && sData.length > 0) {
-      socios = sData.map(r => ({
-        id: r.id, nombre: r.nombre, apellidos: r.apellidos || '',
-        email: r.email || '', tel: r.tel || '', dni: r.dni || '',
-        alta: r.alta, baja: r.baja, tipo: r.tipo,
-        tarifa: r.tarifa || '', bono: r.bono || null,
-        sesTotales: r.ses_totales, sesRestantes: r.ses_restantes,
-        precioBono: r.precio_bono, actividades: r.actividades || '',
-        pago: r.pago, ultPago: r.ult_pago, estado: r.estado,
-        notaEspecial: r.nota_especial || '',
-        pagos: r.pagos || [], sesiones: r.sesiones || []
-      }));
+      // Preservar campos locales que pueden no existir aún como columna en Supabase
+      const prevById = {};
+      try {
+        const prev = JSON.parse(localStorage.getItem('ck_socios') || '[]');
+        prev.forEach(p => { if (p && p.id != null) prevById[p.id] = p; });
+      } catch(_){}
+      socios = sData.map(r => {
+        const prev = prevById[r.id] || {};
+        return {
+          id: r.id, nombre: r.nombre, apellidos: r.apellidos || '',
+          email: r.email || '', tel: r.tel || '', dni: r.dni || '',
+          alta: r.alta, baja: r.baja, tipo: r.tipo,
+          tarifa: r.tarifa || '', bono: r.bono || null,
+          sesTotales: r.ses_totales, sesRestantes: r.ses_restantes,
+          precioBono: r.precio_bono, actividades: r.actividades || '',
+          pago: r.pago, ultPago: r.ult_pago, estado: r.estado,
+          proximaBaja: r.proxima_baja || prev.proximaBaja || null,
+          notaEspecial: r.nota_especial || '',
+          pagos: r.pagos || [], sesiones: r.sesiones || []
+        };
+      });
       console.log('Loaded', socios.length, 'socios from Supabase');
     }
     if (whData && whData.length > 0) {
@@ -1217,19 +1239,35 @@ async function loadFromSupabase() {
 }
 
 async function saveToSupabase() {
-  const sociosDB = socios.map(s => ({
-    id: Math.floor(Number(s.id)), // fuerza INTEGER: Supabase rechaza decimales silenciosamente
-    nombre: s.nombre, apellidos: s.apellidos || '',
-    email: s.email || '', tel: s.tel || '', dni: s.dni || '',
-    alta: s.alta || null, baja: s.baja || null, tipo: s.tipo,
-    tarifa: s.tarifa || '', bono: s.bono || null,
-    ses_totales: s.sesTotales, ses_restantes: s.sesRestantes,
-    precio_bono: s.precioBono || null, actividades: s.actividades || '',
-    pago: s.pago, ult_pago: s.ultPago || null, estado: s.estado,
-    nota_especial: s.notaEspecial || '',
-    pagos: s.pagos || [], sesiones: s.sesiones || []
-  }));
-  await dbUpsert('socios', sociosDB);
+  const buildRows = (includeProximaBaja) => socios.map(s => {
+    const row = {
+      id: Math.floor(Number(s.id)), // fuerza INTEGER: Supabase rechaza decimales silenciosamente
+      nombre: s.nombre, apellidos: s.apellidos || '',
+      email: s.email || '', tel: s.tel || '', dni: s.dni || '',
+      alta: s.alta || null, baja: s.baja || null, tipo: s.tipo,
+      tarifa: s.tarifa || '', bono: s.bono || null,
+      ses_totales: s.sesTotales, ses_restantes: s.sesRestantes,
+      precio_bono: s.precioBono || null, actividades: s.actividades || '',
+      pago: s.pago, ult_pago: s.ultPago || null, estado: s.estado,
+      nota_especial: s.notaEspecial || '',
+      pagos: s.pagos || [], sesiones: s.sesiones || []
+    };
+    if (includeProximaBaja) row.proxima_baja = s.proximaBaja || null;
+    return row;
+  });
+  try {
+    await dbUpsert('socios', buildRows(true));
+  } catch(err) {
+    // Si Supabase no tiene la columna proxima_baja todavía, reintenta sin ella.
+    // El valor queda preservado en localStorage y se re-aplica en loadFromSupabase.
+    const msg = String(err && err.message || '');
+    if (/proxima_baja/i.test(msg) || /column .* does not exist/i.test(msg) || err.status === 400) {
+      console.warn('Supabase sin columna proxima_baja — reintento sin ese campo. Para persistencia completa ejecuta en Supabase:\n  ALTER TABLE socios ADD COLUMN IF NOT EXISTS proxima_baja DATE;');
+      await dbUpsert('socios', buildRows(false));
+    } else {
+      throw err;
+    }
+  }
   if (wellhubData.length) {
     await dbUpsert('wellhub', wellhubData.map(w => ({
       id: Math.floor(Number(w.id)), mes: w.mes, anyo: w.anyo,
@@ -1314,6 +1352,10 @@ function navTo(page, el) {
           <input type="file" accept=".xls,.xlsx" onchange="sincronizarClientesActivos(event)" style="display:none" />
         </label>
         <button class="btn btn-ghost btn-sm" style="color:#e9c46a;border-color:#b5830a" onclick="deshacerSyncActivosUI()" title="Deshacer la última sincronización">↩ DESHACER SYNC</button>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer;color:#e07070;border-color:#8B2020" title="Marcar bajas desde CSV histórico (CODEK Training - Clientes antiguos.csv)">
+          ↑ SYNC BAJAS
+          <input type="file" accept=".csv" onchange="sincronizarBajas(event)" style="display:none" />
+        </label>
         <button class="btn btn-primary" onclick="abrirModalSocio()">+ NUEVO SOCIO</button>
       </div>`;
   } else if (page === 'fact-compra') {
@@ -1334,8 +1376,27 @@ function navTo(page, el) {
 function openModal(id) { document.getElementById(id).classList.add('open'); if (id === 'modal-nuevo-pago') abrirModalNuevoPago(); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
+// Convierte en baja real cualquier socio activo cuya `proximaBaja` ya haya pasado.
+function procesarProximasBajasVencidas() {
+  const hoy = new Date().toISOString().split('T')[0];
+  let cambios = 0;
+  socios.forEach(s => {
+    if (s.estado === 'activo' && s.proximaBaja && s.proximaBaja <= hoy) {
+      s.estado = 'baja';
+      s.baja = s.proximaBaja;
+      s.proximaBaja = null;
+      cambios++;
+    }
+  });
+  if (cambios > 0) { try { save(); } catch(_){} console.log(`procesarProximasBajasVencidas: ${cambios} socios pasados a baja`); }
+  return cambios;
+}
+
 // ===== DASHBOARD =====
 function renderDashboard() {
+  // Convertir en bajas reales las "próximas bajas" cuya fecha ya ha pasado
+  procesarProximasBajasVencidas();
+
   const activos = socios.filter(s => s.estado === 'activo').length;
   const pausados = socios.filter(s => s.estado === 'pausado').length;
   const bajas = socios.filter(s => s.estado === 'baja').length;
@@ -1343,6 +1404,7 @@ function renderDashboard() {
   const bonos = socios.filter(s => s.tipo === 'bono' && s.estado === 'activo').length;
   const pendientes = socios.filter(s => s.estado === 'activo' && (s.pago === 'pendiente' || s.pago === 'vencido')).length;
   const epActivos = socios.filter(s => s.tipo === 'ep' && s.estado === 'activo').length;
+  const proximasBajas = socios.filter(s => s.proximaBaja && s.estado === 'activo').length;
 
   document.getElementById('stat-activos').textContent = activos;
   document.getElementById('stat-pausados').textContent = pausados;
@@ -1351,6 +1413,8 @@ function renderDashboard() {
   document.getElementById('stat-bono').textContent = bonos;
   document.getElementById('stat-pendiente').textContent = pendientes;
   if(document.getElementById('stat-ep')) document.getElementById('stat-ep').textContent = epActivos;
+  const stPB = document.getElementById('stat-proximas-bajas');
+  if (stPB) stPB.textContent = proximasBajas;
   buildDashMesSelector();
 
   // Alertas
@@ -1400,7 +1464,7 @@ function renderSocios() {
     return (a.nombre + ' ' + a.apellidos).localeCompare(b.nombre + ' ' + b.apellidos, 'es');
   });
 
-  const estadoFiltros = new Set(['activo','baja','pausado']);
+  const estadoFiltros = new Set(['activo','baja','pausado','proxima-baja']);
   const tipoFiltros = new Set(['tarifa','bono','ep']);
   const activeEstado = [...filtrosFiltroActual].filter(f => estadoFiltros.has(f));
   const activeTipo   = [...filtrosFiltroActual].filter(f => tipoFiltros.has(f));
@@ -1414,6 +1478,7 @@ function renderSocios() {
         if (f === 'activo') return s.estado === 'activo';
         if (f === 'pausado') return s.estado === 'pausado';
         if (f === 'baja') return s.estado === 'baja';
+        if (f === 'proxima-baja') return s.estado === 'activo' && !!s.proximaBaja;
         return false;
       });
       if (!matchEstado) return false;
@@ -1495,7 +1560,7 @@ function renderSocios() {
       </td>
       <td><span class="tipo-badge tipo-${s.tipo}">${s.tipo}</span></td>
       <td>${tipoInfo}</td>
-      <td><span class="stat-badge badge-${s.estado === 'baja' ? 'gray' : s.estado === 'pausado' ? 'purple' : s.pago === 'pendiente' ? 'yellow' : 'green'}">${s.estado === 'baja' ? 'Baja' : s.estado === 'pausado' ? 'Pausado' : s.pago === 'pendiente' ? 'Pendiente' : 'Activo'}</span></td>
+      <td><span class="stat-badge badge-${s.estado === 'baja' ? 'gray' : s.estado === 'pausado' ? 'purple' : s.pago === 'pendiente' ? 'yellow' : 'green'}">${s.estado === 'baja' ? 'Baja' : s.estado === 'pausado' ? 'Pausado' : s.pago === 'pendiente' ? 'Pendiente' : 'Activo'}</span>${s.estado === 'activo' && s.proximaBaja ? `<div style="font-size:10px;color:#e9c46a;margin-top:3px;font-family:var(--font-display);letter-spacing:1px">BAJA ${formatDate(s.proximaBaja)}</div>` : ''}</td>
       <td>
         <div style="font-family:var(--font-display);font-size:17px;font-weight:800;color:var(--white)">${totalPagado > 0 ? totalPagado.toFixed(2) + ' €' : '—'}</div>
         <div style="font-size:11px;color:var(--gray-400)">últ: ${s.ultPago ? formatDate(s.ultPago) : '—'}</div>
@@ -1544,6 +1609,7 @@ function abrirModalSocio() {
   document.getElementById('s-actividades').value = '';
   document.getElementById('s-pago').value = 'pagado';
   document.getElementById('s-ult-pago').value = '';
+  const pxb = document.getElementById('s-proxima-baja'); if (pxb) pxb.value = '';
   const epd = document.getElementById('s-ep-desc'); if (epd) epd.value = '';
   const pb = document.getElementById('s-precio-bono'); if (pb) pb.value = '';
   document.getElementById('s-ses-total').value = 10;
@@ -1569,6 +1635,7 @@ function editarSocio(id) {
   document.getElementById('s-actividades').value = s.actividades;
   document.getElementById('s-pago').value = s.pago;
   document.getElementById('s-ult-pago').value = s.ultPago || '';
+  const pxb = document.getElementById('s-proxima-baja'); if (pxb) pxb.value = s.proximaBaja || '';
   toggleTipoFields();
   if (s.tipo === 'tarifa') {
     document.getElementById('s-tarifa').value = s.tarifa;
@@ -1619,6 +1686,7 @@ function guardarSocio() {
     actividades: document.getElementById('s-actividades').value.trim(),
     pago: document.getElementById('s-pago').value,
     ultPago: document.getElementById('s-ult-pago').value || null,
+    proximaBaja: (document.getElementById('s-proxima-baja') && document.getElementById('s-proxima-baja').value) || null,
     pagos: []
   };
 
@@ -2533,8 +2601,27 @@ if (facturasVenta.length === 0) {
 function openModal(id) { document.getElementById(id).classList.add('open'); if (id === 'modal-nuevo-pago') abrirModalNuevoPago(); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
+// Convierte en baja real cualquier socio activo cuya `proximaBaja` ya haya pasado.
+function procesarProximasBajasVencidas() {
+  const hoy = new Date().toISOString().split('T')[0];
+  let cambios = 0;
+  socios.forEach(s => {
+    if (s.estado === 'activo' && s.proximaBaja && s.proximaBaja <= hoy) {
+      s.estado = 'baja';
+      s.baja = s.proximaBaja;
+      s.proximaBaja = null;
+      cambios++;
+    }
+  });
+  if (cambios > 0) { try { save(); } catch(_){} console.log(`procesarProximasBajasVencidas: ${cambios} socios pasados a baja`); }
+  return cambios;
+}
+
 // ===== DASHBOARD =====
 function renderDashboard() {
+  // Convertir en bajas reales las "próximas bajas" cuya fecha ya ha pasado
+  procesarProximasBajasVencidas();
+
   const activos = socios.filter(s => s.estado === 'activo').length;
   const pausados = socios.filter(s => s.estado === 'pausado').length;
   const bajas = socios.filter(s => s.estado === 'baja').length;
@@ -2542,6 +2629,7 @@ function renderDashboard() {
   const bonos = socios.filter(s => s.tipo === 'bono' && s.estado === 'activo').length;
   const pendientes = socios.filter(s => s.estado === 'activo' && (s.pago === 'pendiente' || s.pago === 'vencido')).length;
   const epActivos = socios.filter(s => s.tipo === 'ep' && s.estado === 'activo').length;
+  const proximasBajas = socios.filter(s => s.proximaBaja && s.estado === 'activo').length;
 
   document.getElementById('stat-activos').textContent = activos;
   document.getElementById('stat-pausados').textContent = pausados;
@@ -2550,6 +2638,8 @@ function renderDashboard() {
   document.getElementById('stat-bono').textContent = bonos;
   document.getElementById('stat-pendiente').textContent = pendientes;
   if(document.getElementById('stat-ep')) document.getElementById('stat-ep').textContent = epActivos;
+  const stPB = document.getElementById('stat-proximas-bajas');
+  if (stPB) stPB.textContent = proximasBajas;
   buildDashMesSelector();
 
   // Alertas
@@ -2604,6 +2694,7 @@ function abrirModalSocio() {
   document.getElementById('s-actividades').value = '';
   document.getElementById('s-pago').value = 'pagado';
   document.getElementById('s-ult-pago').value = '';
+  const pxb = document.getElementById('s-proxima-baja'); if (pxb) pxb.value = '';
   const epd = document.getElementById('s-ep-desc'); if (epd) epd.value = '';
   const pb = document.getElementById('s-precio-bono'); if (pb) pb.value = '';
   document.getElementById('s-ses-total').value = 10;
@@ -2629,6 +2720,7 @@ function editarSocio(id) {
   document.getElementById('s-actividades').value = s.actividades;
   document.getElementById('s-pago').value = s.pago;
   document.getElementById('s-ult-pago').value = s.ultPago || '';
+  const pxb = document.getElementById('s-proxima-baja'); if (pxb) pxb.value = s.proximaBaja || '';
   toggleTipoFields();
   if (s.tipo === 'tarifa') {
     document.getElementById('s-tarifa').value = s.tarifa;
@@ -2679,6 +2771,7 @@ function guardarSocio() {
     actividades: document.getElementById('s-actividades').value.trim(),
     pago: document.getElementById('s-pago').value,
     ultPago: document.getElementById('s-ult-pago').value || null,
+    proximaBaja: (document.getElementById('s-proxima-baja') && document.getElementById('s-proxima-baja').value) || null,
     pagos: []
   };
 
@@ -3329,6 +3422,160 @@ function limpiarPagosCorruptos() {
 // y sincroniza tipo (bono/tarifa/ep) + estado (activo) de los socios.
 // Los socios con tipo="tarifa" que NO aparezcan en el Excel se marcan baja.
 // Los bono/EP que no aparezcan se dejan como están (no se auto-baja).
+// Lee un CSV con cabeceras tipo:
+// ID;Nombre y apellidos;Teléfonos;Localidad;Tarifas activas;Inicio de la tarifa;Fecha de alta;Fecha de baja
+// Para cada fila, marca al socio como estado='baja' con la Fecha de baja indicada.
+// Si no existe, lo crea con alta/baja ya aplicadas (histórico).
+function sincronizarBajas(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = '';
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const text = e.target.result;
+      // Parser CSV simple con separador ; (y soporte para "")
+      const parseCSV = (txt) => {
+        const lines = txt.replace(/\r/g,'').split('\n').filter(l => l.trim());
+        if (!lines.length) return [];
+        const parse = (line) => {
+          const out = []; let cur = ''; let q = false;
+          for (let i = 0; i < line.length; i++) {
+            const c = line[i];
+            if (c === '"' && line[i+1] === '"') { cur += '"'; i++; continue; }
+            if (c === '"') { q = !q; continue; }
+            if (c === ';' && !q) { out.push(cur); cur = ''; continue; }
+            cur += c;
+          }
+          out.push(cur);
+          return out;
+        };
+        const headers = parse(lines[0]);
+        return lines.slice(1).map(l => {
+          const vals = parse(l);
+          const row = {};
+          headers.forEach((h, i) => row[h.trim()] = (vals[i] || '').trim());
+          return row;
+        });
+      };
+
+      const rows = parseCSV(text);
+      const toISO = (dStr) => {
+        if (!dStr) return null;
+        const m = dStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+        if (!m) return null;
+        let y = parseInt(m[3]); if (y < 100) y = y < 70 ? 2000 + y : 1900 + y;
+        return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+      };
+
+      const syncBatch = 'bajas_' + Date.now();
+      const stats = { marcados: 0, creados: 0, yaBaja: 0, ambiguos: 0, sinFecha: 0 };
+      const detalle = { marcados: [], creados: [], ambiguos: [] };
+
+      const marcarPrev = s => {
+        if (s._prevSyncBatch !== syncBatch) {
+          s._prevSyncBatch = syncBatch;
+          s._prevSyncEstado = s.estado;
+          s._prevSyncBaja = s.baja;
+          s._prevSyncTipo = s.tipo;
+          s._prevSyncTarifa = s.tarifa;
+          s._prevSyncBono = s.bono;
+        }
+      };
+
+      for (const row of rows) {
+        const nombreRaw = row['Nombre y apellidos'] || row['Cliente'] || row['Nombre'] || '';
+        const nombre = String(nombreRaw).replace(/\s+/g,' ').trim();
+        if (!nombre) continue;
+        const nombreNorm = _normNombre(nombre);
+        const fechaBaja = toISO(row['Fecha de baja'] || '');
+        const fechaAlta = toISO(row['Fecha de alta'] || '');
+        if (!fechaBaja) { stats.sinFecha++; continue; }
+
+        const tarifaRaw = String(row['Tarifas activas'] || '').trim();
+        let tipo = 'tarifa';
+        if (/bono/i.test(tarifaRaw)) tipo = 'bono';
+        else if (/entreno\s+personal/i.test(tarifaRaw)) tipo = 'ep';
+
+        const telRaw = String(row['Teléfonos'] || row['Teléfono móvil'] || '').replace(/\s/g,'');
+
+        const matches = socios.filter(s => _normNombre(s.nombre + ' ' + (s.apellidos||'')) === nombreNorm);
+        if (matches.length === 1) {
+          const s = matches[0];
+          if (s.estado === 'baja') { stats.yaBaja++; continue; }
+          marcarPrev(s);
+          s.estado = 'baja';
+          s.baja = fechaBaja;
+          if (fechaAlta && !s.alta) s.alta = fechaAlta;
+          stats.marcados++;
+          detalle.marcados.push(`${s.nombre} ${s.apellidos||''} (baja ${fechaBaja})`);
+        } else if (matches.length === 0) {
+          const partes = nombre.split(' ');
+          const nuevo = {
+            id: Date.now() * 1000 + Math.floor(Math.random() * 1000),
+            nombre: partes[0],
+            apellidos: partes.slice(1).join(' '),
+            dni: '',
+            tel: telRaw,
+            email: '',
+            alta: fechaAlta || fechaBaja,
+            baja: fechaBaja,
+            estado: 'baja',
+            tipo,
+            tarifa: tipo === 'tarifa' ? tarifaRaw : null,
+            bono: tipo === 'bono' ? tarifaRaw : null,
+            sesTotales: null,
+            sesRestantes: null,
+            actividades: '',
+            pago: 'baja',
+            ultPago: null,
+            pagos: [],
+            _origen: 'csv-bajas',
+            _syncBatch: syncBatch
+          };
+          socios.push(nuevo);
+          stats.creados++;
+          detalle.creados.push(`${nombre} (baja ${fechaBaja})`);
+        } else {
+          stats.ambiguos++;
+          detalle.ambiguos.push(`"${nombre}" matchea con ${matches.length} socios`);
+        }
+      }
+
+      try { localStorage.setItem('ck_last_bajas_batch', syncBatch); } catch(_){}
+      try { await save({ flush: true }); }
+      catch(err) { console.error('Fallo al persistir en Supabase:', err); alert('⚠️ ATENCIÓN: los cambios NO se han guardado en Supabase.\n\nMotivo: ' + (err.message || err) + '\n\nSi refrescas ahora (F5) perderás los cambios.'); return; }
+
+      if (typeof renderSocios === 'function') renderSocios();
+      if (typeof renderDashboard === 'function') renderDashboard();
+
+      console.group('🗑 Sync bajas');
+      console.log('Batch:', syncBatch);
+      console.log('Stats:', stats);
+      console.log('Marcados baja:', detalle.marcados);
+      console.log('Creados históricos (ya con baja):', detalle.creados);
+      if (detalle.ambiguos.length) console.log('Ambiguos (revisar):', detalle.ambiguos);
+      console.groupEnd();
+
+      let msg = `✓ Sincronización de bajas completada\n\n`;
+      msg += `Total filas: ${rows.length}\n\n`;
+      msg += `  · Marcados baja (existían activos): ${stats.marcados}\n`;
+      msg += `  · Creados históricos con baja: ${stats.creados}\n`;
+      msg += `  · Ya estaban baja: ${stats.yaBaja}\n`;
+      msg += `  · Nombres ambiguos (revisar F12): ${stats.ambiguos}\n`;
+      msg += `  · Sin fecha de baja: ${stats.sinFecha}\n\n`;
+      msg += `(F12 → Consola para el detalle)`;
+      alert(msg);
+
+    } catch(err) {
+      alert('Error al leer el CSV de bajas: ' + err.message);
+      console.error(err);
+    }
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
 function sincronizarClientesActivos(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -3791,7 +4038,17 @@ function importarExcelPagos(event) {
         return '';
       };
 
-      const getFechaRaw = r => getCol(r, 'fecha', 'date', 'día', 'dia', 'f.');
+      const getFechaRaw = r => {
+        const direct = getCol(r, 'fecha', 'date', 'día', 'dia', 'f.');
+        if (direct) return direct;
+        // Fallback: extraer fecha de "Estado" (formato "TPV RedSys 19/10/2026")
+        const estado = getCol(r, 'estado');
+        if (estado) {
+          const m = String(estado).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+          if (m) return m[0];
+        }
+        return '';
+      };
       const esFormatoUS = _detectarFormatoUS(rows, getFechaRaw);
 
       const stats = { added: 0, sinFecha: 0, sinNombre: 0, sinImporte: 0, duplicados: 0, noEncontrados: 0 };
