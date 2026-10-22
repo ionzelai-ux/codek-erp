@@ -735,14 +735,9 @@
       </div>
 
       <div style="margin-bottom:28px">
-        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
           <span>Evolución mensual</span>
-          <div style="display:flex;gap:14px;font-size:11px;color:var(--gray-300);font-family:var(--font-display);letter-spacing:1px">
-            <span><span style="display:inline-block;width:10px;height:10px;background:#e07070;margin-right:4px;vertical-align:middle"></span>TARIFA</span>
-            <span><span style="display:inline-block;width:10px;height:10px;background:#74b3e8;margin-right:4px;vertical-align:middle"></span>BONO</span>
-            <span><span style="display:inline-block;width:10px;height:10px;background:#c084fc;margin-right:4px;vertical-align:middle"></span>EP</span>
-            <span><span style="display:inline-block;width:10px;height:10px;background:#52b788;margin-right:4px;vertical-align:middle"></span>WELLHUB</span>
-          </div>
+          <div id="chart-legend" style="display:flex;gap:4px;flex-wrap:wrap"></div>
         </div>
         <div id="chart-evolucion" style="background:var(--gray-800);border:1px solid var(--gray-700);padding:20px;min-height:260px"></div>
       </div>
@@ -1389,15 +1384,35 @@ function navTo(page, el) {
 function openModal(id) { document.getElementById(id).classList.add('open'); if (id === 'modal-nuevo-pago') abrirModalNuevoPago(); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-// Gráfico SVG de evolución mensual de ingresos (barras apiladas: tarifa/bono/ep/wellhub).
-// Agrupa pagos de todos los socios por mes de pago + importes de wellhub por mes.
+// Gráfico SVG de evolución mensual con series apiladas y leyenda clickable.
+// Series: tarifa, bono, ep, wellhub, total. Click en una serie la aisla; click en
+// "TODAS" las muestra; click sobre una ya aislada en el fondo normal.
+window._chartSeries = window._chartSeries || { tarifa:true, bono:true, ep:true, wellhub:true };
+
+function toggleSerieGrafico(serie) {
+  const S = window._chartSeries;
+  if (serie === 'todas') {
+    Object.keys(S).forEach(k => S[k] = true);
+  } else {
+    const activas = Object.keys(S).filter(k => S[k]);
+    // Si solo esa está activa → vuelve a todas; si no → aísla esa.
+    if (activas.length === 1 && activas[0] === serie) {
+      Object.keys(S).forEach(k => S[k] = true);
+    } else {
+      Object.keys(S).forEach(k => S[k] = (k === serie));
+    }
+  }
+  renderGraficoEvolucion();
+}
+
 function renderGraficoEvolucion() {
   const cont = document.getElementById('chart-evolucion');
   if (!cont) return;
   const MESES_ES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const S = window._chartSeries;
 
   // Agregar
-  const data = {}; // 'YYYY-MM' -> {tarifa, bono, ep, wellhub}
+  const data = {};
   const touch = (ym) => { if (!data[ym]) data[ym] = {tarifa:0, bono:0, ep:0, wellhub:0}; return data[ym]; };
   socios.forEach(s => {
     (s.pagos||[]).forEach(p => {
@@ -1415,6 +1430,23 @@ function renderGraficoEvolucion() {
   });
 
   const meses = Object.keys(data).sort();
+
+  // Leyenda clickable
+  const colors = { tarifa:'#e07070', bono:'#74b3e8', ep:'#c084fc', wellhub:'#52b788' };
+  const order = ['tarifa','bono','ep','wellhub'];
+  const labels = { tarifa:'Tarifa', bono:'Bono', ep:'EP', wellhub:'Wellhub' };
+  const activasCount = order.filter(k => S[k]).length;
+  const todasActivas = activasCount === order.length;
+  const legEl = document.getElementById('chart-legend');
+  if (legEl) {
+    const pillCss = (active, color) => `cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:var(--font-display);letter-spacing:1px;padding:4px 10px;border:1px solid ${active ? color : '#444'};background:${active ? 'rgba(255,255,255,0.03)' : 'transparent'};color:${active ? '#f5f5f5' : '#666'};transition:all .15s`;
+    let html = `<span onclick="toggleSerieGrafico('todas')" style="${pillCss(todasActivas, '#999')}">TODAS</span>`;
+    order.forEach(k => {
+      html += `<span onclick="toggleSerieGrafico('${k}')" style="${pillCss(S[k], colors[k])}"><span style="display:inline-block;width:9px;height:9px;background:${colors[k]};opacity:${S[k]?1:.3}"></span>${labels[k].toUpperCase()}</span>`;
+    });
+    legEl.innerHTML = html;
+  }
+
   if (meses.length === 0) { cont.innerHTML = '<div style="color:var(--gray-400);text-align:center;padding:40px">Sin datos para mostrar</div>'; return; }
 
   // Dimensiones
@@ -1426,17 +1458,16 @@ function renderGraficoEvolucion() {
   const barW = chartW / meses.length * 0.65;
   const stepX = chartW / meses.length;
 
-  // Escala Y
-  const totales = meses.map(m => data[m].tarifa + data[m].bono + data[m].ep + data[m].wellhub);
+  // Escala Y basada SOLO en las series activas
+  const activas = order.filter(k => S[k]);
+  const totales = meses.map(m => activas.reduce((acc, k) => acc + data[m][k], 0));
   const maxY = Math.max(1, ...totales);
-  const niceMax = Math.ceil(maxY / 500) * 500 || 500;
+  // Redondeo "nice" dinámico
+  const magnitud = Math.pow(10, Math.floor(Math.log10(maxY)));
+  const niceMax = Math.ceil(maxY / (magnitud/2)) * (magnitud/2) || 500;
   const yScale = v => chartH * (1 - v / niceMax);
 
-  const colors = { tarifa:'#e07070', bono:'#74b3e8', ep:'#c084fc', wellhub:'#52b788' };
-  const order = ['tarifa','bono','ep','wellhub'];
-  const labels = { tarifa:'Tarifa', bono:'Bono', ep:'EP', wellhub:'Wellhub' };
-
-  // Grid Y (4 líneas)
+  // Grid Y
   let gridY = '';
   const ticks = 4;
   for (let i = 0; i <= ticks; i++) {
@@ -1454,32 +1485,32 @@ function renderGraficoEvolucion() {
     let total = 0;
     const d = data[m];
     const tooltip = [];
-    order.forEach(k => {
-      const v = d[k];
-      total += v;
+    activas.forEach(k => {
+      const v = d[k]; total += v;
       if (v > 0) tooltip.push(`${labels[k]}: ${v.toFixed(2)}€`);
     });
     tooltip.unshift(`${MESES_ES[parseInt(m.split('-')[1])]} ${m.split('-')[0]} — Total: ${total.toFixed(2)}€`);
-    order.forEach(k => {
+    activas.forEach(k => {
       const v = d[k];
       if (v <= 0) return;
       const h = (chartH * v / niceMax);
       yAcum -= h;
       bars += `<rect x="${x}" y="${yAcum}" width="${barW}" height="${h}" fill="${colors[k]}" opacity="0.9"><title>${tooltip.join('\n')}</title></rect>`;
     });
-    // Total encima de la barra
     if (total > 0) {
       bars += `<text x="${x + barW/2}" y="${yAcum - 6}" fill="#f5f5f5" font-size="11" text-anchor="middle" font-family="monospace" font-weight="700">${Math.round(total).toLocaleString('es-ES')}€</text>`;
     }
-    // Etiqueta mes bajo la barra
     const [yy, mm] = m.split('-');
     bars += `<text x="${x + barW/2}" y="${PAD.top + chartH + 18}" fill="#999" font-size="11" text-anchor="middle" font-family="var(--font-display)" letter-spacing="1">${MESES_ES[parseInt(mm)]} ${yy.slice(2)}</text>`;
   });
 
-  // Eje X
   const axisX = `<line x1="${PAD.left}" y1="${PAD.top+chartH}" x2="${PAD.left+chartW}" y2="${PAD.top+chartH}" stroke="#555" stroke-width="1"/>`;
 
-  cont.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">${gridY}${axisX}${bars}</svg>`;
+  // Subtítulo con lo que se muestra
+  const subt = todasActivas ? 'Todas las series' : activas.map(k=>labels[k]).join(' + ');
+  const sub = `<text x="${PAD.left}" y="${PAD.top-6}" fill="#666" font-size="10" font-family="var(--font-display)" letter-spacing="1">MOSTRANDO: ${subt.toUpperCase()}</text>`;
+
+  cont.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">${sub}${gridY}${axisX}${bars}</svg>`;
 }
 
 // Convierte en baja real cualquier socio activo cuya `proximaBaja` ya haya pasado.
@@ -2708,15 +2739,35 @@ if (facturasVenta.length === 0) {
 function openModal(id) { document.getElementById(id).classList.add('open'); if (id === 'modal-nuevo-pago') abrirModalNuevoPago(); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-// Gráfico SVG de evolución mensual de ingresos (barras apiladas: tarifa/bono/ep/wellhub).
-// Agrupa pagos de todos los socios por mes de pago + importes de wellhub por mes.
+// Gráfico SVG de evolución mensual con series apiladas y leyenda clickable.
+// Series: tarifa, bono, ep, wellhub, total. Click en una serie la aisla; click en
+// "TODAS" las muestra; click sobre una ya aislada en el fondo normal.
+window._chartSeries = window._chartSeries || { tarifa:true, bono:true, ep:true, wellhub:true };
+
+function toggleSerieGrafico(serie) {
+  const S = window._chartSeries;
+  if (serie === 'todas') {
+    Object.keys(S).forEach(k => S[k] = true);
+  } else {
+    const activas = Object.keys(S).filter(k => S[k]);
+    // Si solo esa está activa → vuelve a todas; si no → aísla esa.
+    if (activas.length === 1 && activas[0] === serie) {
+      Object.keys(S).forEach(k => S[k] = true);
+    } else {
+      Object.keys(S).forEach(k => S[k] = (k === serie));
+    }
+  }
+  renderGraficoEvolucion();
+}
+
 function renderGraficoEvolucion() {
   const cont = document.getElementById('chart-evolucion');
   if (!cont) return;
   const MESES_ES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const S = window._chartSeries;
 
   // Agregar
-  const data = {}; // 'YYYY-MM' -> {tarifa, bono, ep, wellhub}
+  const data = {};
   const touch = (ym) => { if (!data[ym]) data[ym] = {tarifa:0, bono:0, ep:0, wellhub:0}; return data[ym]; };
   socios.forEach(s => {
     (s.pagos||[]).forEach(p => {
@@ -2734,6 +2785,23 @@ function renderGraficoEvolucion() {
   });
 
   const meses = Object.keys(data).sort();
+
+  // Leyenda clickable
+  const colors = { tarifa:'#e07070', bono:'#74b3e8', ep:'#c084fc', wellhub:'#52b788' };
+  const order = ['tarifa','bono','ep','wellhub'];
+  const labels = { tarifa:'Tarifa', bono:'Bono', ep:'EP', wellhub:'Wellhub' };
+  const activasCount = order.filter(k => S[k]).length;
+  const todasActivas = activasCount === order.length;
+  const legEl = document.getElementById('chart-legend');
+  if (legEl) {
+    const pillCss = (active, color) => `cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:var(--font-display);letter-spacing:1px;padding:4px 10px;border:1px solid ${active ? color : '#444'};background:${active ? 'rgba(255,255,255,0.03)' : 'transparent'};color:${active ? '#f5f5f5' : '#666'};transition:all .15s`;
+    let html = `<span onclick="toggleSerieGrafico('todas')" style="${pillCss(todasActivas, '#999')}">TODAS</span>`;
+    order.forEach(k => {
+      html += `<span onclick="toggleSerieGrafico('${k}')" style="${pillCss(S[k], colors[k])}"><span style="display:inline-block;width:9px;height:9px;background:${colors[k]};opacity:${S[k]?1:.3}"></span>${labels[k].toUpperCase()}</span>`;
+    });
+    legEl.innerHTML = html;
+  }
+
   if (meses.length === 0) { cont.innerHTML = '<div style="color:var(--gray-400);text-align:center;padding:40px">Sin datos para mostrar</div>'; return; }
 
   // Dimensiones
@@ -2745,17 +2813,16 @@ function renderGraficoEvolucion() {
   const barW = chartW / meses.length * 0.65;
   const stepX = chartW / meses.length;
 
-  // Escala Y
-  const totales = meses.map(m => data[m].tarifa + data[m].bono + data[m].ep + data[m].wellhub);
+  // Escala Y basada SOLO en las series activas
+  const activas = order.filter(k => S[k]);
+  const totales = meses.map(m => activas.reduce((acc, k) => acc + data[m][k], 0));
   const maxY = Math.max(1, ...totales);
-  const niceMax = Math.ceil(maxY / 500) * 500 || 500;
+  // Redondeo "nice" dinámico
+  const magnitud = Math.pow(10, Math.floor(Math.log10(maxY)));
+  const niceMax = Math.ceil(maxY / (magnitud/2)) * (magnitud/2) || 500;
   const yScale = v => chartH * (1 - v / niceMax);
 
-  const colors = { tarifa:'#e07070', bono:'#74b3e8', ep:'#c084fc', wellhub:'#52b788' };
-  const order = ['tarifa','bono','ep','wellhub'];
-  const labels = { tarifa:'Tarifa', bono:'Bono', ep:'EP', wellhub:'Wellhub' };
-
-  // Grid Y (4 líneas)
+  // Grid Y
   let gridY = '';
   const ticks = 4;
   for (let i = 0; i <= ticks; i++) {
@@ -2773,32 +2840,32 @@ function renderGraficoEvolucion() {
     let total = 0;
     const d = data[m];
     const tooltip = [];
-    order.forEach(k => {
-      const v = d[k];
-      total += v;
+    activas.forEach(k => {
+      const v = d[k]; total += v;
       if (v > 0) tooltip.push(`${labels[k]}: ${v.toFixed(2)}€`);
     });
     tooltip.unshift(`${MESES_ES[parseInt(m.split('-')[1])]} ${m.split('-')[0]} — Total: ${total.toFixed(2)}€`);
-    order.forEach(k => {
+    activas.forEach(k => {
       const v = d[k];
       if (v <= 0) return;
       const h = (chartH * v / niceMax);
       yAcum -= h;
       bars += `<rect x="${x}" y="${yAcum}" width="${barW}" height="${h}" fill="${colors[k]}" opacity="0.9"><title>${tooltip.join('\n')}</title></rect>`;
     });
-    // Total encima de la barra
     if (total > 0) {
       bars += `<text x="${x + barW/2}" y="${yAcum - 6}" fill="#f5f5f5" font-size="11" text-anchor="middle" font-family="monospace" font-weight="700">${Math.round(total).toLocaleString('es-ES')}€</text>`;
     }
-    // Etiqueta mes bajo la barra
     const [yy, mm] = m.split('-');
     bars += `<text x="${x + barW/2}" y="${PAD.top + chartH + 18}" fill="#999" font-size="11" text-anchor="middle" font-family="var(--font-display)" letter-spacing="1">${MESES_ES[parseInt(mm)]} ${yy.slice(2)}</text>`;
   });
 
-  // Eje X
   const axisX = `<line x1="${PAD.left}" y1="${PAD.top+chartH}" x2="${PAD.left+chartW}" y2="${PAD.top+chartH}" stroke="#555" stroke-width="1"/>`;
 
-  cont.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">${gridY}${axisX}${bars}</svg>`;
+  // Subtítulo con lo que se muestra
+  const subt = todasActivas ? 'Todas las series' : activas.map(k=>labels[k]).join(' + ');
+  const sub = `<text x="${PAD.left}" y="${PAD.top-6}" fill="#666" font-size="10" font-family="var(--font-display)" letter-spacing="1">MOSTRANDO: ${subt.toUpperCase()}</text>`;
+
+  cont.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">${sub}${gridY}${axisX}${bars}</svg>`;
 }
 
 // Convierte en baja real cualquier socio activo cuya `proximaBaja` ya haya pasado.
