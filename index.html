@@ -900,12 +900,17 @@
 
     <!-- ====== INGRESOS BANCARIOS ====== -->
     <div id="page-ingresos" class="page">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:4px">
+        <button class="pill active" data-rango="mes" onclick="setRangoIngresos('mes', this)">Mes actual</button>
+        <button class="pill" data-rango="anyo" onclick="setRangoIngresos('anyo', this)">Año en curso</button>
+        <button class="pill" data-rango="total" onclick="setRangoIngresos('total', this)">Acumulado</button>
+      </div>
       <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:28px">
-        <div class="stat-card"><div class="stat-label">BBVA ingresos</div><div class="stat-value" id="stat-ing-bbva" style="color:#52b788">0 €</div><div class="stat-sub">solo relevantes</div></div>
-        <div class="stat-card"><div class="stat-label">SumUp</div><div class="stat-value" id="stat-ing-sumup" style="color:#74b3e8">0 €</div><div class="stat-sub">EP tarjeta</div></div>
-        <div class="stat-card"><div class="stat-label">Excluidos BBVA</div><div class="stat-value" id="stat-ing-excl" style="color:#999">0 €</div><div class="stat-sub">cashback/anulación</div></div>
-        <div class="stat-card"><div class="stat-label">ERP tarifa cobrada</div><div class="stat-value" id="stat-ing-erp-tar" style="color:#e07070">0 €</div><div class="stat-sub">suma de pagos tarifa</div></div>
-        <div class="stat-card"><div class="stat-label">ERP EP cobrado</div><div class="stat-value" id="stat-ing-erp-ep" style="color:#c084fc">0 €</div><div class="stat-sub">suma de pagos EP</div></div>
+        <div class="stat-card"><div class="stat-label">BBVA ingresos</div><div class="stat-value" id="stat-ing-bbva" style="color:#52b788;font-size:26px;white-space:nowrap">0 €</div><div class="stat-sub" id="stat-ing-bbva-sub">solo relevantes</div></div>
+        <div class="stat-card"><div class="stat-label">SumUp</div><div class="stat-value" id="stat-ing-sumup" style="color:#74b3e8;font-size:26px;white-space:nowrap">0 €</div><div class="stat-sub">EP tarjeta</div></div>
+        <div class="stat-card"><div class="stat-label">Excluidos BBVA</div><div class="stat-value" id="stat-ing-excl" style="color:#999;font-size:26px;white-space:nowrap">0 €</div><div class="stat-sub">cashback/anulación</div></div>
+        <div class="stat-card"><div class="stat-label">ERP tarifa cobrada</div><div class="stat-value" id="stat-ing-erp-tar" style="color:#e07070;font-size:26px;white-space:nowrap">0 €</div><div class="stat-sub">suma de pagos tarifa</div></div>
+        <div class="stat-card"><div class="stat-label">ERP EP cobrado</div><div class="stat-value" id="stat-ing-erp-ep" style="color:#c084fc;font-size:26px;white-space:nowrap">0 €</div><div class="stat-sub">suma de pagos EP</div></div>
       </div>
 
       <div style="margin-bottom:28px">
@@ -2396,6 +2401,14 @@ function guardarPagoManual() {
 // ===== INGRESOS BANCARIOS =====
 let ingresosBancarios = [];
 window._ingSeries = window._ingSeries || { bbva: true, sumup: true };
+window._ingRango = window._ingRango || 'mes';  // 'mes' | 'anyo' | 'total'
+
+function setRangoIngresos(r, el) {
+  window._ingRango = r;
+  document.querySelectorAll('#page-ingresos .pill').forEach(p => p.classList.remove('active'));
+  if (el) el.classList.add('active');
+  renderIngresosBancarios();
+}
 
 async function loadIngresosBancarios() {
   try {
@@ -2452,18 +2465,34 @@ function renderIngresosBancarios() {
     });
   });
 
-  // Tarjetas totales
-  const totBbva = Object.values(porMes).reduce((a,b)=>a+b.bbva,0);
-  const totSumup = Object.values(porMes).reduce((a,b)=>a+b.sumup,0);
-  const totExcl = Object.values(porMes).reduce((a,b)=>a+b.bbvaExcl,0);
-  const totTar = Object.values(erp).reduce((a,b)=>a+b.tarifa,0);
-  const totEp = Object.values(erp).reduce((a,b)=>a+b.ep,0);
-  const fmt = v => v.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' €';
+  // Tarjetas totales — filtradas por rango
+  const rango = window._ingRango || 'mes';
+  const hoy = new Date();
+  const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}`;
+  const anyoActual = String(hoy.getFullYear());
+  const incluye = (ym) => {
+    if (rango === 'total') return true;
+    if (rango === 'anyo') return ym.startsWith(anyoActual);
+    return ym === mesActual;
+  };
+  const sumPorMes = (obj, key) => Object.entries(obj).reduce((a,[ym,v]) => incluye(ym) ? a + (v[key]||0) : a, 0);
+  const totBbva = sumPorMes(porMes, 'bbva');
+  const totSumup = sumPorMes(porMes, 'sumup');
+  const totExcl = sumPorMes(porMes, 'bbvaExcl');
+  const totTar = sumPorMes(erp, 'tarifa');
+  const totEp = sumPorMes(erp, 'ep');
+  // Formato: sin decimales en tarjetas (más legible)
+  const fmt = v => Math.round(v).toLocaleString('es-ES') + ' €';
   document.getElementById('stat-ing-bbva').textContent = fmt(totBbva);
   document.getElementById('stat-ing-sumup').textContent = fmt(totSumup);
   document.getElementById('stat-ing-excl').textContent = fmt(totExcl);
   document.getElementById('stat-ing-erp-tar').textContent = fmt(totTar);
   document.getElementById('stat-ing-erp-ep').textContent = fmt(totEp);
+  const subEl = document.getElementById('stat-ing-bbva-sub');
+  if (subEl) {
+    const subTxt = rango === 'mes' ? 'mes actual' : rango === 'anyo' ? 'año en curso' : 'acumulado';
+    subEl.textContent = subTxt;
+  }
 
   // --- Leyenda ---
   const legEl = document.getElementById('chart-ing-legend');
