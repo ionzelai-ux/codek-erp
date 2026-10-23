@@ -650,6 +650,12 @@
       Wellhub
     </div>
 
+    <div class="nav-label" style="margin-top:12px">Banca</div>
+    <div class="nav-item" onclick="navTo('ingresos', this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h18M5 6h14l1 4H4z"/><path d="M4 10v10h16V10"/><path d="M9 14h6"/></svg>
+      Ingresos bancarios
+    </div>
+
     <div class="nav-label" style="margin-top:12px">Facturación</div>
     <div class="nav-item" onclick="navTo('fact-venta', this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
@@ -889,6 +895,57 @@
         <div style="padding:14px 16px;border-top:1px solid var(--gray-700);background:var(--gray-700);display:flex;justify-content:flex-end">
           <span style="font-family:var(--font-display);font-size:14px;color:var(--white)">TOTAL: <strong id="wh-total-footer">0,00 €</strong></span>
         </div>
+      </div>
+    </div>
+
+    <!-- ====== INGRESOS BANCARIOS ====== -->
+    <div id="page-ingresos" class="page">
+      <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:28px">
+        <div class="stat-card"><div class="stat-label">BBVA ingresos</div><div class="stat-value" id="stat-ing-bbva" style="color:#52b788">0 €</div><div class="stat-sub">solo relevantes</div></div>
+        <div class="stat-card"><div class="stat-label">SumUp</div><div class="stat-value" id="stat-ing-sumup" style="color:#74b3e8">0 €</div><div class="stat-sub">EP tarjeta</div></div>
+        <div class="stat-card"><div class="stat-label">Excluidos BBVA</div><div class="stat-value" id="stat-ing-excl" style="color:#999">0 €</div><div class="stat-sub">cashback/anulación</div></div>
+        <div class="stat-card"><div class="stat-label">ERP tarifa cobrada</div><div class="stat-value" id="stat-ing-erp-tar" style="color:#e07070">0 €</div><div class="stat-sub">suma de pagos tarifa</div></div>
+        <div class="stat-card"><div class="stat-label">ERP EP cobrado</div><div class="stat-value" id="stat-ing-erp-ep" style="color:#c084fc">0 €</div><div class="stat-sub">suma de pagos EP</div></div>
+      </div>
+
+      <div style="margin-bottom:28px">
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <span>Evolución mensual bancaria</span>
+          <div id="chart-ing-legend" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+        </div>
+        <div id="chart-ingresos" style="background:var(--gray-800);border:1px solid var(--gray-700);padding:20px;min-height:260px"></div>
+      </div>
+
+      <div class="table-wrapper" style="margin-bottom:28px">
+        <div class="table-header">
+          <div class="table-header-title">Conciliación mes a mes</div>
+          <div style="color:var(--gray-400);font-size:11px">ERP vs banco · desvío alto en rojo</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Mes</th>
+              <th style="text-align:right">ERP tarifa</th>
+              <th style="text-align:right">BBVA (tpv+transf+bizum)</th>
+              <th style="text-align:right">Δ tarifa</th>
+              <th style="text-align:right">ERP EP</th>
+              <th style="text-align:right">SumUp</th>
+              <th style="text-align:right">Δ EP</th>
+            </tr>
+          </thead>
+          <tbody id="conciliacion-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="table-wrapper">
+        <div class="table-header">
+          <div class="table-header-title">Movimientos excluidos BBVA</div>
+          <div style="color:var(--gray-400);font-size:11px">No cuentan como ingreso de cliente</div>
+        </div>
+        <table>
+          <thead><tr><th>Fecha</th><th>Concepto</th><th style="text-align:right">Importe</th></tr></thead>
+          <tbody id="excluidos-tbody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -1341,7 +1398,8 @@ function navTo(page, el) {
     'fact-venta': 'Facturas de Venta',
     'fact-compra': 'Facturas de Compra',
     'wellhub': 'Wellhub',
-    'pagos': 'Registro de Pagos'
+    'pagos': 'Registro de Pagos',
+    'ingresos': 'Ingresos bancarios'
   };
 
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -1378,6 +1436,14 @@ function navTo(page, el) {
   if (page === 'wellhub') renderWellhub();
   if (page === 'fact-venta') renderFVenta();
   if (page === 'fact-compra') renderFCompra();
+  if (page === 'ingresos') {
+    // Carga en segundo plano y renderiza al terminar; si ya hay datos, pinta ya.
+    if (ingresosBancarios.length === 0) {
+      loadIngresosBancarios().then(() => renderIngresosBancarios());
+    } else {
+      renderIngresosBancarios();
+    }
+  }
 }
 
 // ===== MODAL =====
@@ -2326,6 +2392,182 @@ function guardarPagoManual() {
   alert(`Pago de ${importe.toFixed(2)}€ registrado para ${s.nombre}`);
 }
 
+
+// ===== INGRESOS BANCARIOS =====
+let ingresosBancarios = [];
+window._ingSeries = window._ingSeries || { bbva: true, sumup: true };
+
+async function loadIngresosBancarios() {
+  try {
+    const r = await fetch(SUPA_URL + '/rest/v1/ingresos_bancarios?select=*&order=fecha.desc', { headers: SUPA_H });
+    if (!r.ok) { console.warn('No se pudieron cargar ingresos_bancarios:', r.status); return; }
+    ingresosBancarios = await r.json();
+    console.log('Ingresos bancarios cargados:', ingresosBancarios.length);
+  } catch(e) { console.error('loadIngresosBancarios:', e); }
+}
+
+function toggleIngSerie(serie) {
+  const S = window._ingSeries;
+  if (serie === 'todas') {
+    S.bbva = true; S.sumup = true;
+  } else {
+    const activas = Object.keys(S).filter(k => S[k]);
+    if (activas.length === 1 && activas[0] === serie) {
+      S.bbva = true; S.sumup = true;
+    } else {
+      Object.keys(S).forEach(k => S[k] = (k === serie));
+    }
+  }
+  renderIngresosBancarios();
+}
+
+function renderIngresosBancarios() {
+  const MESES_ES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const S = window._ingSeries;
+
+  // Agregados
+  const porMes = {}; // 'YYYY-MM' -> {bbva, sumup, bbvaExcl}
+  const bump = (ym) => { if (!porMes[ym]) porMes[ym] = {bbva:0, sumup:0, bbvaExcl:0}; return porMes[ym]; };
+  const excluidos = [];
+  ingresosBancarios.forEach(x => {
+    if (!x.fecha) return;
+    const ym = String(x.fecha).substring(0,7);
+    const imp = parseFloat(x.importe) || 0;
+    const b = bump(ym);
+    if (x.canal === 'sumup') b.sumup += imp;
+    else if (x.canal === 'bbva') {
+      if (x.categoria === 'excluido') { b.bbvaExcl += imp; excluidos.push(x); }
+      else b.bbva += imp;
+    }
+  });
+
+  // Pagos ERP por mes
+  const erp = {}; // ym -> {tarifa, bono, ep}
+  const bumpE = (ym) => { if (!erp[ym]) erp[ym] = {tarifa:0, bono:0, ep:0}; return erp[ym]; };
+  socios.forEach(s => {
+    const tipo = (s.tipo === 'bono' || s.tipo === 'ep') ? s.tipo : 'tarifa';
+    (s.pagos||[]).forEach(p => {
+      if (!p.fecha) return;
+      bumpE(String(p.fecha).substring(0,7))[tipo] += parseFloat(p.importe||0) || 0;
+    });
+  });
+
+  // Tarjetas totales
+  const totBbva = Object.values(porMes).reduce((a,b)=>a+b.bbva,0);
+  const totSumup = Object.values(porMes).reduce((a,b)=>a+b.sumup,0);
+  const totExcl = Object.values(porMes).reduce((a,b)=>a+b.bbvaExcl,0);
+  const totTar = Object.values(erp).reduce((a,b)=>a+b.tarifa,0);
+  const totEp = Object.values(erp).reduce((a,b)=>a+b.ep,0);
+  const fmt = v => v.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' €';
+  document.getElementById('stat-ing-bbva').textContent = fmt(totBbva);
+  document.getElementById('stat-ing-sumup').textContent = fmt(totSumup);
+  document.getElementById('stat-ing-excl').textContent = fmt(totExcl);
+  document.getElementById('stat-ing-erp-tar').textContent = fmt(totTar);
+  document.getElementById('stat-ing-erp-ep').textContent = fmt(totEp);
+
+  // --- Leyenda ---
+  const legEl = document.getElementById('chart-ing-legend');
+  if (legEl) {
+    const colors = { bbva:'#52b788', sumup:'#74b3e8' };
+    const labels = { bbva:'BBVA', sumup:'SumUp' };
+    const todas = S.bbva && S.sumup;
+    const pillCss = (active, color) => `cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:var(--font-display);letter-spacing:1px;padding:4px 10px;border:1px solid ${active ? color : '#444'};background:${active ? 'rgba(255,255,255,0.03)' : 'transparent'};color:${active ? '#f5f5f5' : '#666'}`;
+    let html = `<span onclick="toggleIngSerie('todas')" style="${pillCss(todas,'#999')}">TODAS</span>`;
+    ['bbva','sumup'].forEach(k => {
+      html += `<span onclick="toggleIngSerie('${k}')" style="${pillCss(S[k], colors[k])}"><span style="display:inline-block;width:9px;height:9px;background:${colors[k]};opacity:${S[k]?1:.3}"></span>${labels[k].toUpperCase()}</span>`;
+    });
+    legEl.innerHTML = html;
+  }
+
+  // --- Gráfico ---
+  const cont = document.getElementById('chart-ingresos');
+  const meses = Object.keys(porMes).sort();
+  if (!cont) return;
+  if (meses.length === 0) { cont.innerHTML = '<div style="color:var(--gray-400);text-align:center;padding:40px">Sin datos para mostrar</div>'; }
+  else {
+    const W = Math.max(600, cont.clientWidth || 900);
+    const H = 260;
+    const PAD = { top: 20, right: 20, bottom: 46, left: 60 };
+    const chartW = W - PAD.left - PAD.right;
+    const chartH = H - PAD.top - PAD.bottom;
+    const activas = ['bbva','sumup'].filter(k => S[k]);
+    const totales = meses.map(m => activas.reduce((a,k)=>a+porMes[m][k],0));
+    const maxY = Math.max(1, ...totales);
+    const mag = Math.pow(10, Math.floor(Math.log10(maxY)));
+    const niceMax = Math.ceil(maxY / (mag/2)) * (mag/2) || 500;
+    const yScale = v => chartH * (1 - v / niceMax);
+    const colors = { bbva:'#52b788', sumup:'#74b3e8' };
+    const labels = { bbva:'BBVA', sumup:'SumUp' };
+    const stepX = chartW / meses.length;
+    const barW = stepX * 0.65;
+    let gridY = '';
+    for (let i=0; i<=4; i++) {
+      const v = niceMax*i/4; const y = yScale(v)+PAD.top;
+      gridY += `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left+chartW}" y2="${y}" stroke="#333" stroke-dasharray="2,3"/>`;
+      gridY += `<text x="${PAD.left-8}" y="${y+4}" fill="#999" font-size="10" text-anchor="end" font-family="monospace">${Math.round(v).toLocaleString('es-ES')}</text>`;
+    }
+    let bars = '';
+    meses.forEach((m,i) => {
+      const x = PAD.left + stepX*i + (stepX-barW)/2;
+      let yAcum = PAD.top + chartH;
+      let total = 0;
+      const d = porMes[m];
+      const tip = [];
+      activas.forEach(k => { const v=d[k]; total+=v; if (v>0) tip.push(`${labels[k]}: ${v.toFixed(2)}€`); });
+      tip.unshift(`${MESES_ES[parseInt(m.split('-')[1])]} ${m.split('-')[0]} — Total: ${total.toFixed(2)}€`);
+      activas.forEach(k => {
+        const v = d[k]; if (v<=0) return;
+        const h = chartH*v/niceMax; yAcum -= h;
+        bars += `<rect x="${x}" y="${yAcum}" width="${barW}" height="${h}" fill="${colors[k]}" opacity="0.9"><title>${tip.join('\n')}</title></rect>`;
+      });
+      if (total>0) bars += `<text x="${x+barW/2}" y="${yAcum-6}" fill="#f5f5f5" font-size="11" text-anchor="middle" font-family="monospace" font-weight="700">${Math.round(total).toLocaleString('es-ES')}€</text>`;
+      const [yy,mm] = m.split('-');
+      bars += `<text x="${x+barW/2}" y="${PAD.top+chartH+18}" fill="#999" font-size="11" text-anchor="middle" font-family="var(--font-display)" letter-spacing="1">${MESES_ES[parseInt(mm)]} ${yy.slice(2)}</text>`;
+    });
+    const axisX = `<line x1="${PAD.left}" y1="${PAD.top+chartH}" x2="${PAD.left+chartW}" y2="${PAD.top+chartH}" stroke="#555"/>`;
+    cont.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">${gridY}${axisX}${bars}</svg>`;
+  }
+
+  // --- Tabla de conciliación ---
+  const tbody = document.getElementById('conciliacion-tbody');
+  if (tbody) {
+    const allMeses = [...new Set([...meses, ...Object.keys(erp)])].sort();
+    const colorDif = (d, base) => {
+      const abs = Math.abs(d); const pct = base > 0 ? abs/base : 1;
+      if (abs < 100) return '#52b788';
+      if (pct < 0.2) return '#e9c46a';
+      return '#e07070';
+    };
+    tbody.innerHTML = allMeses.map(m => {
+      const b = porMes[m] || {bbva:0, sumup:0};
+      const e = erp[m] || {tarifa:0, ep:0};
+      const d1 = b.bbva - e.tarifa; const d2 = b.sumup - e.ep;
+      const [yy,mm] = m.split('-');
+      return `<tr>
+        <td style="font-family:var(--font-display);letter-spacing:1px">${MESES_ES[parseInt(mm)]} ${yy}</td>
+        <td style="text-align:right;font-family:monospace">${e.tarifa.toFixed(2)} €</td>
+        <td style="text-align:right;font-family:monospace">${b.bbva.toFixed(2)} €</td>
+        <td style="text-align:right;font-family:monospace;color:${colorDif(d1,e.tarifa)};font-weight:700">${(d1>=0?'+':'')}${d1.toFixed(2)} €</td>
+        <td style="text-align:right;font-family:monospace">${e.ep.toFixed(2)} €</td>
+        <td style="text-align:right;font-family:monospace">${b.sumup.toFixed(2)} €</td>
+        <td style="text-align:right;font-family:monospace;color:${colorDif(d2,e.ep)};font-weight:700">${(d2>=0?'+':'')}${d2.toFixed(2)} €</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--gray-400)">Sin datos</td></tr>';
+  }
+
+  // --- Tabla de excluidos ---
+  const exT = document.getElementById('excluidos-tbody');
+  if (exT) {
+    exT.innerHTML = excluidos.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'')).map(x => {
+      const [y,mo,d] = (x.fecha||'----').split('-');
+      return `<tr>
+        <td style="font-family:var(--font-display);letter-spacing:1px">${d}/${mo}/${y}</td>
+        <td style="color:var(--gray-300);font-size:13px">${(x.concepto||'').substring(0,120)}</td>
+        <td style="text-align:right;font-family:monospace;color:#999">${parseFloat(x.importe||0).toFixed(2)} €</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="3" style="text-align:center;padding:40px;color:var(--gray-400)">Sin excluidos</td></tr>';
+  }
+}
 
 // ===== WELLHUB =====
 const MESES = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
